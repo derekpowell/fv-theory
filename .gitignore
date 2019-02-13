@@ -34,3 +34,25 @@ vignettes/*.pdf
 
 # Shiny token, see https://shiny.rstudio.com/articles/shinyapps.html
 rsconnect/
+
+# PDFs and other outputs
+*.pdf
+*.html
+*.png
+*.tiff
+
+# Private directories
+/*_private/
+/**/*_private/
+
+# local-only directories
+/*_local/
+/**/*_local/
+/local/
+
+# script to obscure workerIds and ip addresses
+redact.R
+
+# brms models
+/brms_models/*
+**/brms_models/*

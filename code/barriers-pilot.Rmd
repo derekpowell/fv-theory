@@ -1,0 +1,371 @@
+---
+title: "nutrition barriers pilot"
+output: html_notebook
+---
+
+This experiment examined the relationsips among fruits and vegetable (FV) consumption and beliefs about the efficacy of FV consumption for improving health, motivation to consume FVs, and of experienced barriers to FV consumption.
+
+Experiment was conducted February 12, 2019, recruiting 220 participants. Qualtrics is called "nutrition barriers pilot".
+
+This is a pilot study conducted to test a new scale measuring barriers to fruit and vegetable consumption. The idea is that accounting for these barriers may reveal a stronger relationship between motivation and efficacy beliefs and FV consumption. If this suggestion is validated, it would further validate those scales as meaningfully connected to FV consumption. Further, to the extent that an intervention affects responses on these scales, we can conclude it is affecting beliefs that are meaningfully related to FV consumption.
+
+FV consumption was measured with 30-item Food Frequency Questionnaire and 2-item FV intake questionnaire.
+
+```{r}
+library(tidyverse)
+```
+
+## Data import and preprocessing
+
+```{r}
+# load (anonymized) data
+header <- colnames(read.csv("../data/nutrition+barriers+pilot_February+12,+2019_14.46.csv", header = TRUE))
+df <- read.csv("../data/nutrition+barriers+pilot_February+12,+2019_14.46.csv", skip = 3, header = FALSE, col.names = header)
+
+# do some preliminary tidying
+df <- df %>%
+  as_tibble() %>%
+  select(workerId, StartDate:Finished, sex:ffq_fruit_plums, ffq_time_Page.Submit, e01:surv_pay) %>%
+  rename(Duration = Duration..in.seconds.) %>%
+  mutate_at(vars(m08, b01,b03,b04, b06,b08, b09,b10,b11), function(x){8 - x}) # fixing issues in qualtrics
+
+# and trim bad subjects
+df <- df %>%
+  filter(check_2==2, check_7==7, ffq_veg_check6==6, ffq_fruit_check30==30) %>%
+  select(-contains("check"))
+```
+
+
+## Scale reliability
+
+```{r}
+
+# corr plot code
+## ----------------------------------------
+
+reorder_cormat <- function(cormat){
+  # Use correlation between variables as distance
+  dd <- as.dist((1-cormat)/2)
+  hc <- hclust(dd)
+  cormat <-cormat[hc$order, hc$order]
+}
+
+# Get lower triangle of the correlation matrix
+get_lower_tri<-function(cormat){
+  cormat[upper.tri(cormat)] <- NA
+  return(cormat)
+}
+# Get upper triangle of the correlation matrix
+get_upper_tri <- function(cormat){
+  cormat[lower.tri(cormat)]<- NA
+  return(cormat)
+}
+  
+## ----------------------------------------
+df %>%
+  # select(e01:e08) %>%
+  # select(m01:m08) %>%
+  select(b01:b12r) %>%
+  cor() %>%
+  reorder_cormat() %>%
+  # get_lower_tri() %>%
+  reshape2::melt(na.rm=TRUE) %>%
+  ggplot(aes(x=Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white") +
+  geom_tile() +
+  geom_text(aes(label=round(value,2)), size=6*.35) +
+  # scale_fill_distiller(type="div", palette = "RdYlBu") +
+  scale_fill_viridis_c(limit = c(-1,1)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=.85)) +
+  theme(aspect.ratio = 1) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    axis.ticks = element_blank()
+  ) +
+  labs(fill="corr.")
+```
+
+```{r}
+effect_alpha <- psych::alpha((df %>% select(e01:e08)), check.keys = TRUE)
+motive_alpha <- psych::alpha((df %>% select(m01:m08)), check.keys = TRUE)
+barriers_alpha <- psych::alpha((df %>% select(b01:b12r)), check.keys = TRUE)
+
+effect_alpha$total$raw_alpha
+motive_alpha$total$raw_alpha
+barriers_alpha$total$raw_alpha
+```
+
+Reliability coefficients looks decent though not amazing. Still somewhat weak for effectiveness.
+
+```{r}
+df %>%
+  select(workerId, e01:e08, m01:m08, b01:b12r) %>%
+  gather(item, response, -workerId) %>%
+  mutate(
+    scale = case_when(
+      grepl("m", item) ~ "motivation",
+      grepl("e", item) ~ "efficacy",
+      grepl("b", item) ~ "barriers",
+    )
+  ) %>%
+  group_by(workerId,scale) %>%
+  summarize(mean_response = mean(response)) %>% 
+  spread(scale,mean_response) -> df_scales
+
+df_scales %>%
+  ggplot(aes(x = efficacy, y = motivation)) +
+  geom_point() +
+  theme_bw()
+```
+
+Efficacy beliefs and motivation are modestly correlated R = `r round(cor(df_scales$efficacy, df_scales$motivation),3)`, similar to what was observed before.
+
+```{r}
+df_scales %>%
+  ggplot(aes(x = barriers, y = motivation)) +
+  geom_point() +
+  theme_bw()
+```
+
+Motivation and experienced barriers are less strongly but weakly-to-modestly correlated R = `r round(cor(df_scales$barriers, df_scales$motivation),3)`. Efficacy and barriers are only weakly correlated, R = `r round(cor(df_scales$efficacy, df_scales$barriers),3)`, which is fortunate.
+
+## Fruit and vegetable consumption
+
+```{r}
+df %>%
+  select(workerId, starts_with("ffq_veg"), starts_with("ffq_fruit")) %>%
+  gather(food, value, -workerId) %>%
+  group_by(food) %>%
+  summarize(Mean = mean(value), se = sd(value)/sqrt(n()) ) %>%
+  mutate(ll = Mean + se, ul = Mean-se) %>%
+  mutate(category = ifelse(grepl("veg", food), "vegetable","fruit")) %>%
+  mutate(food = gsub("ffq_veg_","", food)) %>%
+  mutate(food = gsub("ffq_fruit_","", food)) %>%
+  ggplot(aes(x=reorder(food,-Mean), y=Mean, ymin=ll, ymax=ul)) +
+  geom_pointrange() +
+  facet_wrap(~category, scales="free_x") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  
+```
+
+FV consumption as assessed by single-item questions asking about average consumption per day.
+
+```{r}
+df %>%
+  select(workerId, fruitsperday, vegsperday) %>%
+  gather(food, value, -workerId) %>% 
+  ggplot(aes(x=value)) +
+    geom_histogram() +
+  facet_wrap(~food) +
+  theme_bw()
+```
+
+
+```{r}
+df %>%
+  select(workerId, 
+         fruitsperday, 
+         vegsperday, 
+         starts_with("ffq_veg"), 
+         starts_with("ffq_fruit")
+         ) %>%
+  gather(food, value, -workerId, -fruitsperday, -vegsperday) %>%
+  mutate(category = ifelse(grepl("veg", food), "vegetable","fruit")) %>%
+  group_by(workerId, fruitsperday, vegsperday, category) %>%
+  summarize(ffq_avg = sum(value)/30) %>%
+  spread(category, ffq_avg) -> fv_df
+
+```
+
+Correlation between FFQ and single-item measures are moderately correlated for fruits `r round(cor(fv_df$fruitsperday, fv_df$fruit),3)` and vegetables `r round(cor(fv_df$vegsperday, fv_df$vegetable),3)`. Correlations are similar for both.
+
+As this plot shows, FFQ systematically overestimates the per-day intake compared with the single-item average measurements. 
+
+```{r}
+fv_df %>%
+  mutate(ffq = fruit + vegetable, single_items = fruitsperday+vegsperday) %>% 
+  ggplot(aes(x=single_items, y=ffq)) +
+  geom_point() +
+  geom_abline(slope=1,intercept=0, linetype="dashed", alpha=.5) +
+  xlim(c(0,14)) +
+  ylim(c(0,14)) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+```
+
+## Connecting attitutdes, barriers, and FV consumption
+
+So as a first pass I'm going to do this in the simplest way I can think of.
+
+```{r}
+df %>%
+  gather(food, value, starts_with("ffq_veg"), starts_with("ffq_fruit")) %>%
+  mutate(category = ifelse(grepl("veg", food), "vegetable", "fruit")) %>%
+  group_by(workerId, fruitsperday, vegsperday, category) %>%
+  summarize(ffq_avg = sum(value) / 30) %>%
+  spread(category, ffq_avg) %>%
+  left_join(
+    (
+      df %>%
+        gather(item, response, e01:e08, m01:m08, b01:b12r) %>%
+        mutate(
+          scale = case_when(
+            grepl("m", item) ~ "motivation",
+            grepl("e", item) ~ "efficacy",
+            grepl("b", item) ~ "barriers",
+          )
+        ) %>%
+        group_by(workerId, scale) %>%
+        summarize(mean_response = mean(response)) %>%
+        spread(scale, mean_response)
+    ),
+    by = "workerId"
+  ) %>%
+  mutate(total_si = fruitsperday + vegsperday, total_ffq = fruit + vegetable) %>%
+  ungroup() -> df_basic
+
+```
+
+let's plot!
+
+```{r}
+df_basic %>%
+  ggplot(aes(x=motivation, y = total_ffq, color=barriers)) +
+  geom_jitter() +
+  scale_color_viridis_c() +
+  geom_smooth(method="lm", color="orange") +
+  theme_bw()
+```
+
+This isn't showing what I might have expected, which would have been people with higher barriers (yellow dots) being below the regression line and people with low barriers (blue dots) above the regression line. This almost looks like the opposite, to the extent it looks like anything at all.
+
+Here's a correlation matrix:
+
+```{r}
+round(cor( (df_basic %>% select(-workerId))), 2)
+```
+
+Bad news: barriers is pretty strongly correlated with motivation and efficacy. So, I think this barriers scale isn't working the way we'd hoped.
+
+```{r}
+# lm(total_ffq ~ efficacy + motivation + barriers, data=df_basic) %>% summary()
+
+fit <- lm(total_ffq ~ barriers, data=df_basic) 
+
+df_fit <- df_basic %>%
+  mutate(residuals = fit$residuals)
+
+cor(df_fit$residuals,df_fit$efficacy)
+cor(df_fit$residuals,df_fit$motivation)
+```
+
+Accounting for barriers doesn't seem to lead to meaningfully better predictions for efficacy or motivation, sadly. So this would seem to be a bust!
+
+A quick look at the relationship between barriers and FV intake is revealing ... no correlation!
+
+```{r}
+df_basic %>%
+  ggplot(aes(x=barriers, y = total_ffq)) +
+  geom_jitter() +
+  scale_color_viridis_c() +
+  geom_smooth(method="lm", color="orange") +
+  theme_bw()
+```
+
+Yet throwing these guys into a regression together produces a significant coefficient for barriers. So there's some kind of weird suppression thing going on? Adding motivation and efficacy to the same model reveals no effect of efficacy, suggesting a mediated relationship (which is quite sensible). 
+
+So more to unravel here ...
+
+
+```{r}
+df_basic_scaled <-  df_basic %>%
+  select(-workerId) %>%
+  mutate_all(scale)
+
+lm(total_ffq ~ efficacy + barriers, data=df_basic_scaled) %>% summary()
+lm(total_ffq ~ motivation + barriers, data=df_basic_scaled) %>% summary()
+lm(total_ffq ~ efficacy + motivation + barriers, data=df_basic_scaled) %>% summary()
+
+lm(total_ffq ~ barriers, data=df_basic_scaled) %>% summary()
+```
+
+Standardizing everything so that coefficients can be interpreted as partial correlations, partial correlation of efficacy controlling for barriers is ~ R = .24 and partial correlation of barriers with ffq is ~ R = -.17. When you add motivation, partial correlation of motivation is R = .52, barriers is R = -.325 and efficacy is non-significant at R = .10. 
+
+So altogether I think this supports a kind of mediated model like so:
+
+`efficacy --> (+) motivation --> (+) FV consumption (-) <-- barriers`
+
+If we can show that our intervention improves motivation, I think we can say that it could plausibly impact actual behaviors as well. I was thinking of it as more aimed at impacting efficacy, but hopefully, if it affects efficacy, it will in turn affect motivation.
+
+
+Let's look at the barriers more specifically ....
+
+```{r}
+df %>%
+  select(workerId, starts_with("ffq_veg"), starts_with("ffq_fruit")) %>%
+  gather(food, resp, -workerId) %>%
+  group_by(workerId) %>%
+  summarize(fv_intake = sum(resp)/30) %>%
+  left_join(
+    df %>%
+      select(workerId, b01:b12r),
+    by="workerId"
+  ) %>%
+  select(-workerId) %>%
+  cor()
+```
+
+Looking at the barriers more closely, some correlations are going the wrong way! Most notably, concerns about pesticides (I suppose only health nuts worry about that?), being disappointed about fruit not being ripe (necessitates purchasing it), fruits being out of season (again, have to know something and pursue fvs), and eating out at places that don't serve FVs (suggests awarness of FVs absence?).
+
+The most correlated with FV intake are b05r and b07r. Let's try selecting only those .... (plus b02r)
+
+```{r}
+df %>%
+  gather(food, value, starts_with("ffq_veg"), starts_with("ffq_fruit")) %>%
+  mutate(category = ifelse(grepl("veg", food), "vegetable", "fruit")) %>%
+  group_by(workerId, fruitsperday, vegsperday, category) %>%
+  summarize(ffq_avg = sum(value) / 30) %>%
+  spread(category, ffq_avg) %>%
+  left_join(
+    (
+      df %>%
+        gather(item, response, e01:e08, m01:m08, b02r, b05r,b07r) %>%
+        mutate(
+          scale = case_when(
+            grepl("m", item) ~ "motivation",
+            grepl("e", item) ~ "efficacy",
+            grepl("b", item) ~ "barriers",
+          )
+        ) %>%
+        group_by(workerId, scale) %>%
+        summarize(mean_response = mean(response)) %>%
+        spread(scale, mean_response)
+    ),
+    by = "workerId"
+  ) %>%
+  mutate(total_si = fruitsperday + vegsperday, total_ffq = fruit + vegetable) %>%
+  ungroup() -> df_basic
+```
+
+When we calculate barriers this way then things don't look so good at all. So there's something very strange going on with our barriers scale. Not to mention it doesn't really look right in the plots either.
+
+```{r}
+df_basic_scaled <-  df_basic %>%
+  select(-workerId) %>%
+  mutate_all(scale)
+
+# play around with these to check different things ...
+lm(total_ffq ~ efficacy + barriers, data=df_basic_scaled) %>% summary()
+lm(total_ffq ~ motivation + barriers, data=df_basic_scaled) %>% summary()
+lm(total_ffq ~ efficacy + motivation + barriers, data=df_basic_scaled) %>% summary()
+
+lm(total_ffq ~ barriers, data=df_basic_scaled) %>% summary()
+```
+
+Calculating barriers this way, it's actually just taking variance away from efficacy/motivation. Motivation correlates with behavior R = ~.40 which isn't TERRIBLE but not really very compelling either.
