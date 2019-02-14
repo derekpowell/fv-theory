@@ -9,7 +9,7 @@ We have already conducted nearly a dozen studies examining these issues. Many of
 
 ## Present studies
 
-The present (and future) studies in this project are aimed at taking a more methodical approach to first identify an effective and validated set of measurements and then to test the effects of various interventions on those measures. 
+The present (and future) studies in this project are aimed at taking a more methodical approach to first identify an effective and validated set of measurements and then to test the effects of various interventions on those measures.
 
 The overall plan of the project is to:
 
@@ -31,4 +31,6 @@ I'm trying to be more organized.
 
 ### Notes
 
-Computational Reproducibility: Analyses should run in Docker container `derekpowell/rstudio-dmp:201808301` .
+Computational Reproducibility: R version 3.5.2, requires `tidyverse` packages.
+
+Analyses should run in Docker container `derekpowell/rstudio-bayesreg`.
