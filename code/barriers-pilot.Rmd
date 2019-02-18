@@ -232,11 +232,41 @@ fv_df %>%
   geom_point() +
   # geom_smooth(method="lm") +
   geom_abline(slope=1,intercept=0, linetype="dashed", alpha=.5) +
-  xlim(c(0,14)) +
-  ylim(c(0,14)) +
+  # xlim(c(0,14)) +
+  # ylim(c(0,14)) +
   theme_bw() +
   theme(aspect.ratio = 1) +
   labs(title="FV intake: FFQ vs single-items")
+```
+
+
+**February 16, 2019 (AFTER MEETING)**: Can also treat ffq responses as ordinal/likert and then average. Doing so do dosn't improve correlations though ...
+
+
+```{r}
+df %>%
+  select(workerId, 
+         fruitsperday, 
+         vegsperday, 
+         starts_with("ffq_veg"), 
+         starts_with("ffq_fruit")
+         ) %>%
+  gather(food, value, -workerId, -fruitsperday, -vegsperday) %>%
+  mutate(value = recode( value,
+    `1`=1,
+    `2.5`=2,
+    `6`=3,
+    `16`=4,
+    `30`=5
+  )) %>%
+  mutate(category = ifelse(grepl("veg", food), "vegetable","fruit")) %>%
+  group_by(workerId, fruitsperday, vegsperday, category) %>%
+  summarize(ffq_avg = sum(value)) %>%
+  ungroup() %>%
+  spread(category, ffq_avg) %>%
+  mutate(ffq = fruit + vegetable, single_items = fruitsperday+vegsperday) %>% 
+  select(ffq, single_items) %>%
+  rcor()
 ```
 
 ## Looking at efficacy and motivation
