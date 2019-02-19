@@ -240,35 +240,6 @@ fv_df %>%
 ```
 
 
-**February 16, 2019 (AFTER MEETING)**: Can also treat ffq responses as ordinal/likert and then average. Doing so do dosn't improve correlations though ...
-
-
-```{r}
-df %>%
-  select(workerId, 
-         fruitsperday, 
-         vegsperday, 
-         starts_with("ffq_veg"), 
-         starts_with("ffq_fruit")
-         ) %>%
-  gather(food, value, -workerId, -fruitsperday, -vegsperday) %>%
-  mutate(value = recode( value,
-    `1`=1,
-    `2.5`=2,
-    `6`=3,
-    `16`=4,
-    `30`=5
-  )) %>%
-  mutate(category = ifelse(grepl("veg", food), "vegetable","fruit")) %>%
-  group_by(workerId, fruitsperday, vegsperday, category) %>%
-  summarize(ffq_avg = sum(value)) %>%
-  ungroup() %>%
-  spread(category, ffq_avg) %>%
-  mutate(ffq = fruit + vegetable, single_items = fruitsperday+vegsperday) %>% 
-  select(ffq, single_items) %>%
-  rcor()
-```
-
 ## Looking at efficacy and motivation
 
 ```{r}
@@ -439,7 +410,7 @@ df %>%
   rcor()
 ```
 
-Looking at the individual barriers, some correlations with FV intake are going the wrong way! Most notably, concerns about pesticides (I suppose only health nuts worry about that?--this problem was already evident before), being disappointed about fruit not being ripe (necessitates purchasing it), fruits being out of season (again, have to know something and pursue fvs), and eating out at places that don't serve FVs (suggests awarness of FVs absence?).
+Looking at the individual barriers, some correlations with FV intake are going the wrong way! Most notably, concerns about pesticides (I suppose only health nuts worry about that?--this problem was already evident before), being disappointed about fruit not being ripe (necessitates purchasing it), fruits being out of season (again, have to know something and pursue fvs), and eating out at places that don't serve FVs (suggests awareness of FVs absence?).
 
 ### Income
 
@@ -475,7 +446,7 @@ df_basic %>%
 
 ```
 
-Well that's a big nothing! Not much to see, though a bit of a decrease in barriers at high income brackets, presumably due to the items asking about financial hardship.
+Not much to see, though a bit of a decrease in barriers at high income brackets, presumably due to the items asking about financial hardship.
 
 ### Other demographics
 
@@ -510,7 +481,7 @@ Not much to see. This is all with ffq measures of fv consumption, things look si
 
 ### location?
 
-This is crude, but just using latitude, on hte logic that southern states have more growing season weather and thus more access to fruits and vegetables. There's a relationship but it's quite weak, and doesn't seem to do anything to account for variance not accounted for by the motivation scale.
+This is crude, but we can look at how participant's locations relate to their fruit and vegetable intake. Here I will just use latitude as recorded by Qualtrics, on the thinking that southern states have more growing season weather and thus more access to fruits and vegetables. There's a relationship but it's quite weak, and doesn't seem to do anything to account for variance not accounted for by the motivation scale.
 
 ```{r}
 df_basic %>%
@@ -519,7 +490,7 @@ df_basic %>%
   ggplot(aes(x=LocationLatitude, y=total_ffq)) +
   # geom_jitter(height=.1,width=1) +
   geom_point() +
-  geom_smooth() +
+  geom_smooth(method="lm") +
   ylim(0,15) +
   theme_bw() +
   labs(title="Latitude x FFQ")
@@ -537,16 +508,46 @@ df_basic %>%
   facet_wrap(~measure)
 ```
 
-Playing around ... nothing to see here.
+### Miscellany
+
+We could also treat ffq responses as ordinal/likert and then average them, rather than trying to use them to compute daily fruit and vegetable intake. Doing so doesn't meaningfully change the relationships here though. 
+
 
 ```{r}
-
-df_aug <- df_basic %>%
-  left_join(df %>% select(workerId, income, LocationLatitude, LocationLongitude ), by ="workerId") %>%
-  filter(LocationLatitude < 50, LocationLatitude > 25) %>%
-  filter(income!=0)
-
-lm(total_ffq ~ motivation + LocationLatitude, data = df_aug) %>% summary()
-
+df %>%
+  select(workerId, 
+         fruitsperday, 
+         vegsperday, 
+         starts_with("ffq_veg"), 
+         starts_with("ffq_fruit")
+         ) %>%
+  gather(food, value, -workerId, -fruitsperday, -vegsperday) %>%
+  mutate(value = recode( value,
+    `1`=1,
+    `2.5`=2,
+    `6`=3,
+    `16`=4,
+    `30`=5
+  )) %>%
+  mutate(category = ifelse(grepl("veg", food), "vegetable","fruit")) %>%
+  group_by(workerId, fruitsperday, vegsperday, category) %>%
+  summarize(ffq_avg = sum(value)) %>%
+  ungroup() %>%
+  spread(category, ffq_avg) %>%
+  mutate(ffq = fruit + vegetable, single_items = fruitsperday+vegsperday) %>% 
+  select(ffq, single_items, workerId) %>%
+  left_join(df_basic, by="workerId") %>%
+  select(ffq, single_items, motivation, barriers, efficacy) %>%
+  rcor()
 ```
 
+# Conclusions
+
+In light of these data, we can draw some preliminary conclusions:
+1. The relationship between motivation and fruit and vegetable intake seems fairly strong
+2. The relatioship between efficacy beliefs and fruit and vegetable intake is weaker
+3. But, the clear mediating relationship through motivation helps these relationships all seem sensible
+4. The "barriers" scale doesn't seem to be functioning as we expected, and isn't proving very useful.
+5. Ultimately, the relationship between motivation (and to a lesser extent, efficacy) and fruit and vegetable consumption suggests it is a useful measure. An intervention which meaningfully impacted motivation, as measured by the motivation scale here, could be thought of as likely to meaningfully affect fruit and vegetable consumption in turn.
+
+Provisionally, we will proceed using these scales, removing item m08 from the motivation scale following our discussion about it.
