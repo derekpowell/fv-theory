@@ -1,17 +1,13 @@
 ---
-title: "Nutrition Studies: barriers pilot"
+title: "Nutrition Studies: attitude scales prereg"
+author: Derek Powell
+date: February 26, 2019
 output: 
   html_notebook: 
     code_folding: hide
 ---
 
-This study examined the relationsips among fruits and vegetable (FV) consumption and beliefs about the efficacy of FV consumption for improving health, motivation to consume FVs, and of experienced barriers to FV consumption.
-
-Study was conducted February 12, 2019, recruiting 220 participants. Qualtrics is called "nutrition barriers pilot".
-
-This is a pilot study conducted to test a new scale measuring barriers to fruit and vegetable consumption. The idea is that accounting for these barriers may reveal a stronger relationship between motivation and efficacy beliefs and FV consumption. If this suggestion is validated, it would further validate those scales as meaningfully connected to FV consumption. Further, to the extent that an intervention affects responses on these scales, we can conclude it is affecting beliefs that are meaningfully related to FV consumption.
-
-FV consumption was measured with 30-item Food Frequency Questionnaire and 2-item FV intake questionnaire.
+This preregistered study examined the relationsips among fruits and vegetable (FV) consumption and beliefs about the efficacy of FV consumption for improving health, and motivation to consume FVs.
 
 ```{r echo=FALSE}
 library(tidyverse)
@@ -21,15 +17,14 @@ library(tidyverse)
 
 ```{r}
 # load (anonymized) data
-header <- colnames(read.csv("../data/nutrition+barriers+pilot_February+12,+2019_14.46.csv", header = TRUE))
-df <- read.csv("../data/nutrition+barriers+pilot_February+12,+2019_14.46.csv", skip = 3, header = FALSE, col.names = header)
+header <- colnames(read.csv("../data/nutrition+scales+prereg_February+26,+2019_14.51.csv", header = TRUE))
+df <- read.csv("../data/nutrition+scales+prereg_February+26,+2019_14.51.csv", skip = 3, header = FALSE, col.names = header)
 
 # do some preliminary tidying
 df <- df %>%
   as_tibble() %>%
   select(workerId, StartDate:Finished, sex:ffq_fruit_plums, ffq_time_Page.Submit, e01:surv_pay, LocationLatitude, LocationLongitude) %>%
-  rename(Duration = Duration..in.seconds.) %>%
-  mutate_at(vars(m08, b01,b03,b04, b06,b08,b09,b10,b11), function(x){8 - x}) # fixing issues in qualtrics
+  rename(Duration = Duration..in.seconds.)
 
 # and trim bad subjects
 df <- df %>%
@@ -37,6 +32,10 @@ df <- df %>%
   select(-contains("check"))
 ```
 
+
+Experiment was conducted February 26, 2019, recruiting 300 participants with the hope of reaching a final sample size of at least 250. This was successful as we ended up with n = `r nrow(df)` participants. Qualtrics is called "nutrition scales prereg".
+
+FV consumption was measured with 30-item Food Frequency Questionnaire and 2-item FV intake questionnaire.
 
 ## Scale reliability
 
@@ -71,7 +70,7 @@ get_upper_tri <- function(cormat){
 ## ----------------------------------------
 df %>%
   # select(e01:e08) %>%
-  select(m01:m08) %>%
+  select(m01:m07r) %>%
   # select(b01:b12r) %>%
   cor() %>%
   reorder_cormat() %>%
@@ -126,51 +125,29 @@ df %>%
   labs(fill="corr.", title="efficacy")
 ```
 
+The efficacy scale looks a little two-dimensional here. Items e06r and eo7r form their own little cluster. These are:
 
-```{r}
-df %>%
-  # select(e01:e08) %>%
-  # select(m01:m08) %>%
-  select(b01:b12r) %>%
-  cor() %>%
-  reorder_cormat() %>%
-  # get_lower_tri() %>%
-  reshape2::melt(na.rm=TRUE) %>%
-  ggplot(aes(x=Var1, y = Var2, fill = value)) +
-  geom_tile(color = "white") +
-  geom_tile() +
-  geom_text(aes(label=round(value,2)), size=6*.35) +
-  scale_fill_distiller(type="div", palette = "RdYlBu", limit=c(-1,1)) +
-  # scale_fill_viridis_c(limit = c(-1,1)) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=.85)) +
-  theme(aspect.ratio = 1) +
-  theme(
-    axis.title.x = element_blank(),
-    axis.title.y = element_blank(),
-    panel.grid.major = element_blank(),
-    panel.border = element_blank(),
-    panel.background = element_blank(),
-    axis.ticks = element_blank()
-  ) +
-  labs(fill="corr.", title="Barriers")
-```
+- e06r "Whether you eat well or not won’t make much difference if your genetics predispose you to be unhealthy."
+- e07r "As you get older, you are likely to develop health problems regardless of how you eat."
 
-So a first pass here looks like b08 is a problem item, being signifiantly negatively correlated with some other things. This item measured concerns about pesticides (I suppose only health nuts worry about that?).
+It makes sense they would be most strongly correlated with each other, but disappointing they are not very correlated with the rest of the scale.
 
-I'm going to augment the scale by removing b08 (though this doesn't end up making much difference).
+### Coefficients alpha
 
 ```{r}
 effect_alpha <- psych::alpha((df %>% select(e01:e08)), check.keys = TRUE)
-motive_alpha <- psych::alpha((df %>% select(m01:m08)), check.keys = TRUE)
-barriers_alpha <- psych::alpha((df %>% select(b01:b07r,b09:b12r)))
+motive_alpha <- psych::alpha((df %>% select(m01:m07r)), check.keys = TRUE)
 
 effect_alpha$total$raw_alpha
 motive_alpha$total$raw_alpha
-barriers_alpha$total$raw_alpha
 ```
 
-Reliability coefficients looks decent though not amazing. Still somewhat weak for effectiveness.
+Reliability coefficients looks decent though not amazing. Still somewhat weak for effectiveness. And unfortunately, alpha would go up if e06r and e07r were dropped:
+
+```{r}
+effect_alpha
+```
+
 
 ## Fruit and vegetable consumption
 
@@ -229,16 +206,17 @@ As this plot shows, FFQ systematically overestimates the per-day intake compared
 fv_df %>%
   mutate(ffq = fruit + vegetable, single_items = fruitsperday+vegsperday) %>% 
   ggplot(aes(x=single_items, y=ffq)) +
-  geom_point() +
+  geom_point(shape=1) +
   # geom_smooth(method="lm") +
   geom_abline(slope=1,intercept=0, linetype="dashed", alpha=.5) +
-  # xlim(c(0,14)) +
-  # ylim(c(0,14)) +
+  xlim(c(0,21)) +
+  ylim(c(0,21)) +
   theme_bw() +
   theme(aspect.ratio = 1) +
   labs(title="FV intake: FFQ vs single-items")
 ```
 
+There appears to be at least one extreme outlier/abberant responder (20 on ffq, 2.5 on si).
 
 ## Looking at efficacy and motivation
 
@@ -252,12 +230,11 @@ df %>%
   left_join(
     (
       df %>%
-        gather(item, response, e01:e08, m01:m08, b01:b07r, b09:b12r) %>% # exclude b08
+        gather(item, response, e01:e08, m01:m07r) %>% # exclude b08
         mutate(
           scale = case_when(
             grepl("m", item) ~ "motivation",
             grepl("e", item) ~ "efficacy",
-            grepl("b", item) ~ "barriers",
           )
         ) %>%
         group_by(workerId, scale) %>%
@@ -271,19 +248,28 @@ df %>%
 
 ```
 
-
 Let's first look at correlations between our three scales and our measures of FV intake. Here's a correlation table:
 
 ```{r}
 
 rcor(
   df_basic %>% 
-    select(barriers, motivation, efficacy, total_si, total_ffq)
+    select(motivation, efficacy, total_si, total_ffq)
   )
 
 ```
 
-Some disappointing things here. First, barriers isn't meaningfully correlated with our ffq-based measure of fv intake, and only weakly correlated with our single-item measures. Worse, barriers is negatively correlated with motivation and efficacy.
+This is looking pretty good. The correlations between motivaiton and efficacy are quite high, as might be expected. However, some of it is driven by some participants on the extremes.
+
+```{r}
+df_basic %>%
+  ggplot(aes(x=efficacy, y = motivation)) +
+  geom_jitter() +
+  # scale_color_viridis_c() +
+  geom_smooth(method="lm", color="orange") +
+  theme_bw() +
+  theme(aspect.ratio=1)
+```
 
 
 Let's press on and look at how motivation and efficacy affect FV intake. Here's a plot of motivaiton and ffq intake. 
@@ -312,7 +298,9 @@ df_basic %>%
   facet_wrap(~measure)
 ```
 
-Putting both efficacy and motivation into the same model leads the efficacy coefficient to go to zero (more or less), supporting a mediation model:
+### Mediation
+
+This is a quick-and-dirty test of mediation. Putting both efficacy and motivation into the same model leads the efficacy coefficient to go to zero (more or less), supporting a mediation model:
 
 `efficacy --> (+) motivation --> (+) FV consumption`
 
@@ -321,100 +309,20 @@ df_basic_scaled <-  df_basic %>%
   select(-workerId) %>%
   mutate_all(scale)
 
+lm(total_si ~ efficacy, data=df_basic_scaled) %>% summary()
 lm(total_si ~ efficacy + motivation, data=df_basic_scaled) %>% summary()
-lm(total_ffq ~ efficacy + motivation, data=df_basic_scaled) %>% summary()
+# lm(total_ffq ~ efficacy + motivation, data=df_basic_scaled) %>% summary()
 ```
 
-The correlation of motivation with the single-item ffq is r = `r rcor(df_basic$motivation, df_basic$total_si)` and with the full ffq is r = `r rcor(df_basic$motivation, df_basic$total_ffq)`. The first of those especially seems pretty respectable, accounting for `r cor(df_basic$motivation, df_basic$total_si)^2 %>% round(3)`% of the variance.
+The correlation of motivation with the single-item ffq is r = `r rcor(df_basic$motivation, df_basic$total_si)` and with the full ffq is r = `r rcor(df_basic$motivation, df_basic$total_ffq)`. The first of those especially seems pretty respectable, accounting for `r (cor(df_basic$motivation, df_basic$total_si)^2 %>% round(3))*100`% of the variance.
 
-### Barriers
+## Demographics and Possible barriers
 
-Now let's add barriers to the mix. We can plot how barriers might affect the relationship between fv intake and motivation, by adding color to our earlier plots.
-
-```{r}
-df_basic %>%
-  gather(measure, fv_intake, total_ffq, total_si) %>%
-  ggplot(aes(x=motivation, y = fv_intake, color=barriers)) +
-  geom_jitter() +
-  scale_color_viridis_c() +
-  geom_smooth(method="lm", color="orange") +
-  theme_bw() +
-  facet_wrap(~measure)
-```
-
-This isn't showing what I might have expected, which would have been people with higher barriers (yellow dots) being below the regression line and people with low barriers (blue dots) above the regression line. This almost looks like the opposite, to the extent it looks like anything at all.
-
-One clear issue is that barriers is pretty strongly correlated with motivation and efficacy. 
-
-```{r}
-df_basic %>%
-  ggplot(aes(x=barriers, y = motivation)) +
-  geom_point() +
-  geom_smooth(method="lm", color="orange") +
-  theme_bw() +
-  theme(aspect.ratio=1)
-
-df_basic %>%
-  ggplot(aes(x=barriers, y = efficacy)) +
-  geom_point() +
-  geom_smooth(method="lm", color="orange") +
-  theme_bw() +
-  theme(aspect.ratio=1)
-```
-
-We can also look at the relationship between barriers and FV intake. As in the correlation table, very little correlation.
-
-```{r}
-df_basic %>%
-  gather(measure, fv_intake, total_ffq,total_si) %>%
-  ggplot(aes(x=barriers, y = fv_intake)) +
-  geom_jitter() +
-  scale_color_viridis_c() +
-  geom_smooth(method="lm", color="orange") +
-  theme_bw() +
-  facet_wrap(~measure)
-```
-
-Yet throwing these guys into a regression together produces a significant coefficient for barriers. So there's some kind of weird suppression thing going on? Adding motivation and efficacy to the same model reveals no effect of efficacy, suggesting a mediated relationship (which is quite sensible). 
-
-So more to unravel here ...
-
-```{r}
-
-
-lm(total_ffq ~ efficacy + barriers, data=df_basic_scaled) %>% summary()
-lm(total_ffq ~ motivation + barriers, data=df_basic_scaled) %>% summary()
-lm(total_ffq ~ efficacy + motivation + barriers, data=df_basic_scaled) %>% summary()
-
-lm(total_ffq ~ barriers, data=df_basic_scaled) %>% summary()
-```
-
-Controlling for motivaiton, barriers actually has a POSITIVE relationship with FV intake when they are put into the same model. So the barriers scale is pretty clearly not workign the way we had in mind.
-
-## Rethinking barriers
-
-Let's look at the barriers more specifically ....
-
-```{r}
-df %>%
-  select(workerId, starts_with("ffq_veg"), starts_with("ffq_fruit")) %>%
-  gather(food, resp, -workerId) %>%
-  group_by(workerId) %>%
-  summarize(fv_intake = sum(resp)/30) %>%
-  left_join(
-    df %>%
-      select(workerId, b01:b12r),
-    by="workerId"
-  ) %>%
-  select(-workerId) %>%
-  rcor()
-```
-
-Looking at the individual barriers, some correlations with FV intake are going the wrong way! Most notably, concerns about pesticides (I suppose only health nuts worry about that?--this problem was already evident before), being disappointed about fruit not being ripe (necessitates purchasing it), fruits being out of season (again, have to know something and pursue fvs), and eating out at places that don't serve FVs (suggests awareness of FVs absence?).
+What are some possible barriers to FV consumption we might anticipate based on demographics?
 
 ### Income
 
-Let's look at participants' income as a predictor of FV intake and barriers, etc. We had 6 income brackets:
+Let's look at participants' income as a predictor of FV intake. We had 6 income brackets:
 
 1 - Less than \$20,000  
 2 - \$20,000 - \$30,0000  
@@ -435,18 +343,9 @@ df_basic %>%
   theme_bw() +
   labs(title="Income x ffq")
 
-df_basic %>%
-  left_join(df %>% select(workerId, income, educ, age, sex), by ="workerId") %>%
-  filter(income!=0) %>%
-  ggplot(aes(x=income, y=barriers)) +
-  geom_jitter(width=.25,height=0) +
-  geom_smooth() +
-  theme_bw() +
-  labs(title="Income x barriers")
-
 ```
 
-Not much to see, though a bit of a decrease in barriers at high income brackets, presumably due to the items asking about financial hardship.
+Not much to see.
 
 ### Other demographics
 
@@ -537,17 +436,17 @@ df %>%
   mutate(ffq = fruit + vegetable, single_items = fruitsperday+vegsperday) %>% 
   select(ffq, single_items, workerId) %>%
   left_join(df_basic, by="workerId") %>%
-  select(ffq, single_items, motivation, barriers, efficacy) %>%
+  select(ffq, single_items, motivation, efficacy) %>%
   rcor()
 ```
 
-# Conclusions
+# Provisional Conclusions
 
-In light of these data, we can draw some preliminary conclusions:
-1. The relationship between motivation and fruit and vegetable intake seems fairly strong
-2. The relatioship between efficacy beliefs and fruit and vegetable intake is weaker
-3. But, the clear mediating relationship through motivation helps these relationships all seem sensible
-4. The "barriers" scale doesn't seem to be functioning as we expected, and isn't proving very useful.
-5. Ultimately, the relationship between motivation (and to a lesser extent, efficacy) and fruit and vegetable consumption suggests it is a useful measure. An intervention which meaningfully impacted motivation, as measured by the motivation scale here, could be thought of as likely to meaningfully affect fruit and vegetable consumption in turn.
+I plan to conduct a more careful version of these analyses (especially the mediation aspects). But, provisionally I can conclude:
 
-Provisionally, we will proceed using these scales, removing item m08 from the motivation scale following our discussion about it.
+1. Motivation adn efficacy scales are reasonably unidimensional and reliable (though efficacy is not quite unidimensional).
+1. Motivation and Efficacy beliefs strongly related
+2. Motivation and Efficacy scales robustly predict FV consumption
+3. Relationship between efficacy beliefs and FV consumption mediated by Motivation
+
+All in all it's quite a sensible set of results and it suggests that educational interventions that can affect motivation and efficacy beliefs would have promise for improving people's actual fruit and vegetable consumption.
