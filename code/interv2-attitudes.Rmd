@@ -1,0 +1,347 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(brms)
+library(betareg)
+
+source("helpers.R")
+
+theme_set(theme_bw() + theme(panel.grid = element_blank()))
+
+##----------------------------------------
+# load + preprocess data
+pre_raw <- read_qualtrics("../data_private/nutrition+interv+june2019+pretest_June+5,+2019_09.32.csv")
+post_raw <- read_qualtrics("../data_private/nutrition+interv+june2019+posttest_June+6,+2019_13.52.csv", skip=4)
+
+dropped_out <- read_csv("../data_private/nutrition_interv_june2019_posttest-Responses in Progress.csv") %>%
+  select(condition)
+
+pre <- pre_raw %>%
+  filter(Progress==100, check_2==2, check_7==7) %>%
+  select(-check_2, -check_7) %>%
+  select(
+    workerId, m01:e06, sex:enjoy_cook
+  ) %>%
+  rename_at(vars(contains("0")), function(x){paste0("pre_",x)})
+
+post <- post_raw %>%
+  filter(Progress==100, check_2==2, check_7==7) %>%
+  select(-check_2, -check_7) %>%
+  select(
+    workerId, condition, m01:e06
+  ) %>%
+  rename_at(vars(contains("0")), function(x){paste0("post_",x)})
+
+df <- left_join( post, pre, by="workerId") %>%
+  distinct(workerId, .keep_all = TRUE)  %>% # two duplicates with identical entries, not sure why
+  mutate(condition = factor(condition, levels = c("theoryBased","myplate","control")))
+
+```
+
+We recruited `r nrow(pre_raw)` participants, of whom `r nrow(pre)` passed attention checks in the pretest phase and were re-recruited. A total of `r nrow(post_raw)` returned, and of those `r nrow(post)` passed attention checks at posttest.
+
+We randomly assigned 1/3 each to our theory-based intervention, the USDA's MyPlate information, and control intervention that discussed the benefits of being a "locavore".
+
+How many Ps per condition?
+
+```{r}
+## check dropout at posttest
+# post %>%
+#   group_by(Finished, condition) %>%
+#   count()
+
+
+df %>%
+  group_by(condition) %>%
+  count()
+
+dropped_out %>% count(condition)
+```
+
+Looks like dropout rates are lowest in the control condition, but myplate and our theory-based intervention are very similar.
+
+```{r}
+dfl <- df %>%
+  gather(item, resp, pre_m01:pre_e06, post_m01:post_e06) %>%
+  mutate(phase = factor(if_else(grepl("post_", item),"posttest","pretest"), levels=c("pretest","posttest"))) %>%
+  mutate(item = sub("pre_","", item), item = sub("post_","", item)) %>%
+  mutate(Scale = if_else(grepl("m",item), "motivation", "efficacy"))
+
+df_scored <- dfl %>%
+  mutate(condition = factor(condition)) %>%
+  group_by(workerId, condition, Scale, phase) %>%
+  summarize(score = mean(resp)) %>%
+  mutate(phase_code = if_else(phase=="pretest",0,1))
+```
+
+
+## Plots
+
+Compare average scores across conditions ...
+
+```{r}
+df_scored %>%
+  mutate(phase = ordered(phase, levels=c("pretest","posttest"))) %>%
+  ggplot(aes(x=score, fill=phase)) +
+  geom_histogram(position="dodge", alpha=.7, bins=20) +
+  scale_fill_discrete() +
+  facet_grid(~Scale + condition)
+
+df_scored %>%
+  # mutate(phase = ordered(phase, levels=c("pretest","posttest"))) %>%
+  ggplot(aes(x=condition, y = score, fill=phase)) +
+  scale_fill_discrete() +
+  geom_boxplot() +
+  facet_wrap(~Scale)
+```
+
+Comparing change scores across individual items ...
+
+```{r}
+dfl %>%
+  spread(phase, resp) %>%
+  mutate(change = posttest-pretest) %>%
+  group_by(condition, Scale, item) %>%
+  summarize(mean_change=mean(change), 
+            ul = mean(change) + sd(change)/sqrt(n()),
+            ll = mean(change) - sd(change)/sqrt(n())) %>%
+  ggplot(aes(x=item, y=mean_change, color=condition, ymin=ll, ymax=ul)) +
+  geom_pointrange() +
+  facet_wrap(~Scale, nrow = 1, scales="free_x")
+```
+
+# Analyses
+
+First, a simple test over change scores.
+
+```{r}
+df_change <- df_scored %>%
+  select(-phase_code) %>%
+  spread(phase, score) %>%
+  mutate(change = posttest - pretest)
+
+
+summary(lm(change ~ condition, data=df_change %>% filter(Scale=="efficacy")))
+summary(lm(change ~ condition, data=df_change %>% filter(Scale=="motivation")))
+
+# summary(lm(posttest ~ pretest + condition, data=df_change %>% filter(Scale=="efficacy")))
+# summary(lm(posttest ~ pretest + condition, data=df_change %>% filter(Scale=="motivation")))
+```
+
+effect size ...
+
+```{r}
+df_change %>%
+  group_by(Scale,condition) %>%
+  summarize(mean_change = mean(change), sd_change = sd(change))
+```
+
+I don't like R's effect size packages so just doing this manually:
+
+efficacy, control vs ours: .43
+efficacy, myplate vs ours: .22
+
+motivation, control vs ours: .258
+motivation, myplate vs ours: .13
+
+Those are pretty small, especially ours versus myplate.
+
+Then, a beta regression examining the model `posttest ~ pretest + condition` using scores on average for each scale (beta regression to account for boundedness).
+
+```{r}
+
+df_beta_change <- df_change %>%
+  ungroup() %>%
+  mutate(pretest = rescale_beta(pretest, 1,7), posttest = rescale_beta(posttest, 1,7))
+
+summary(betareg(posttest ~ pretest + condition, data=df_beta_change %>% filter(Scale=="efficacy")))
+summary(betareg(posttest ~ pretest + condition, data=df_beta_change %>% filter(Scale=="motivation")))
+```
+
+
+### Multilevel models
+
+Finally, multilevel ordinal regression models to provide the real tests. Both efficacy and motivation showed improvement in our intervention compared with control and myplate.
+
+```{r}
+fit_item_eff <- cbrm(
+  resp ~ 1 + phase*condition + (1|workerId) + (1|item),
+  data = dfl %>% filter(Scale=="efficacy"),
+  family = cumulative(threshold="flexible"),
+  prior = c(
+    cumulative_intercept_prior(7, sd = 2, shape="leftskewed"),
+    prior(normal(0, 0.5), class="b")
+    ),
+  sample_prior = "yes",
+  chains = 2,
+  cores = 2,
+  iter = 2000,
+  control = list(adapt_delta=.90),
+  file = "../local/s2_fit_item_eff.Rds"
+)
+
+summary(fit_item_eff)
+```
+
+```{r}
+fit_item_motive <- cbrm(
+  resp ~ 1 + phase*condition + (1|workerId) + (1|item),
+  data = dfl %>% filter(Scale=="motivation"),
+  family = cumulative(threshold="flexible"),
+  prior = c(
+    # prior(normal(-1,2), class="Intercept"),
+    cumulative_intercept_prior(7, sd = 2, shape="leftskewed"),
+    prior(normal(0,1), class="b")
+    ),
+  sample_prior = "yes",
+  chains = 2,
+  cores = 2,
+  iter = 2000,
+  control = list(adapt_delta=.90),
+  file = "../local/s2_fit_item_motive.Rds"
+)
+
+summary(fit_item_motive)
+```
+
+## Delayed posttest
+
+Due to my error, the delayed posttest was posted 1 week later than intended -- after 11 days rather than 4 days.
+
+```{r}
+post2_raw <- read_qualtrics("../data_private/nutrition+interv+june2019+delay+posttest_June+19%2C+2019_15.08.csv")
+
+post2 <- post2_raw %>%
+  as_tibble() %>%
+  filter(Progress==100, check_2==2, check_7==7) %>%
+  select(-check_2, -check_7) %>%
+  select(
+    workerId, m01:e06
+  ) %>%
+  # mutate_at(vars(contains("0")), as.numeric) %>%
+  rename_at(vars(contains("0")), function(x){paste0("post2_",x)})
+
+df_delay <- left_join( df, post2, by="workerId")
+```
+
+Of our original `r nrow(df)` participants, `r nrow(post2)` returned and completed the delayed posttest while passing all attention checks.
+
+```{r}
+dfl_delay <- df_delay %>%
+  gather(item, resp, pre_m01:pre_e06, post_m01:post_e06, post2_m01:post2_e06) %>%
+  mutate(
+    phase = factor(case_when(
+      grepl("pre_", item) ~ "pretest",
+      grepl("post_", item) ~ "posttest",
+      grepl("post2_", item) ~ "posttest2"
+      ), levels=c("pretest","posttest","posttest2"))
+    ) %>%
+  mutate(item = sub("pre_","", item), item = sub("post_","", item), item = sub("post2_","", item)) %>%
+  mutate(Scale = if_else(grepl("m",item), "motivation", "efficacy"))
+
+df_scored_delay <- dfl_delay %>%
+  mutate(condition = factor(condition)) %>%
+  group_by(workerId, condition, Scale, phase) %>%
+  summarize(score = mean(resp))
+
+df_scored_delay %>%
+  # mutate(phase = ordered(phase, levels=c("pretest","posttest"))) %>%
+  ggplot(aes(x=condition, y = score, fill=phase)) +
+  scale_fill_discrete() +
+  geom_boxplot() +
+  facet_wrap(~Scale)
+```
+
+A simple test using a linear model shows significantly higher efficacy scores after delay compared to control and myplate, but no remaining effect for motivation.
+
+```{r}
+df_change_delay <- df_scored_delay %>%
+  spread(phase, score) %>%
+  mutate(change = posttest2 - pretest)
+
+
+# t.test(change ~ condition, data=df_change_delay %>% filter(Scale=="efficacy"))
+# t.test(change ~ condition, data=df_change_delay %>% filter(Scale=="motivation"))
+
+summary(lm(posttest2 ~ pretest + condition, data=df_change_delay %>% filter(Scale=="efficacy")))
+summary(lm(posttest2 ~ pretest + condition, data=df_change_delay %>% filter(Scale=="motivation")))
+```
+
+A beta regression supports the same conclusions.
+
+```{r}
+df_beta_change_delay <- df_change_delay %>%
+  ungroup() %>%
+  mutate(pretest = rescale_beta(pretest, 1,7), posttest2 = rescale_beta(posttest2, 1,7))
+
+summary(betareg(posttest2 ~ pretest + condition, data=df_beta_change_delay %>% filter(Scale=="efficacy")))
+summary(betareg(posttest2 ~ pretest + condition, data=df_beta_change_delay %>% filter(Scale=="motivation")))
+```
+
+Let's inspect the effects on each item a bit more closely. Looks fairly similar to what we observed before.
+
+```{r}
+dfl_delay %>%
+  spread(phase, resp) %>%
+  mutate(change = posttest2-pretest) %>%
+  filter(!is.na(change)) %>%
+  group_by(condition, Scale, item) %>%
+  summarize(mean_change=mean(change), 
+            ul = mean(change) + sd(change)/sqrt(n()),
+            ll = mean(change) - sd(change)/sqrt(n())) %>%
+  ggplot(aes(x=item, y=mean_change, color=condition, ymin=ll, ymax=ul)) +
+  geom_pointrange(position=position_dodge(.25)) +
+  facet_wrap(~Scale, nrow = 1, scales="free_x")
+```
+
+
+```{r}
+
+fit_item_eff_delay <- cbrm(
+  resp ~ 1 + phase*condition + (1|workerId) + (1|item),
+  data = dfl_delay %>% filter(Scale=="efficacy"),
+  family = cumulative(threshold="flexible"),
+  prior = c(
+    cumulative_intercept_prior(7, sd = 2, shape="leftskewed"),
+    prior(normal(0, 0.5), class="b")
+    ),
+  # sample_prior = "yes",
+  chains = 2,
+  cores = 2,
+  iter = 2000,
+  control = list(adapt_delta=.90),
+  file = "../local/s2_fit_item_eff_delay.Rds"
+)
+
+summary(fit_item_eff_delay)
+```
+
+```{r}
+fit_item_motive_delay <- cbrm(
+  resp ~ 1 + phase*condition + (1|workerId) + (1|item),
+  data = dfl_delay %>% filter(Scale=="motivation"),
+  family = cumulative(threshold="flexible"),
+  prior = c(
+    # prior(normal(-1,2), class="Intercept"),
+    cumulative_intercept_prior(7, sd = 2, shape="leftskewed"),
+    prior(normal(0, 0.5), class="b")
+    ),
+  # sample_prior = "yes",
+  chains = 4,
+  cores = 4,
+  iter = 2000,
+  control = list(adapt_delta=.95),
+  file = "../local/s2_fit_item_motive_delay.Rds"
+)
+
+summary(fit_item_motive_delay)
+```
+

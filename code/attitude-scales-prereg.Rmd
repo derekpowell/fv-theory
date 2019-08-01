@@ -450,3 +450,60 @@ I plan to conduct a more careful version of these analyses (especially the media
 3. Relationship between efficacy beliefs and FV consumption mediated by Motivation
 
 All in all it's quite a sensible set of results and it suggests that educational interventions that can affect motivation and efficacy beliefs would have promise for improving people's actual fruit and vegetable consumption.
+
+# Updates
+
+March 1, 2019  
+
+After meeting and discussing, the non-unidimensionality of the efficacy scale seems potentially problematic. The easiest solution is to just drop the two items that weren't part of the main cluster (unfortunatley, that leaves us with no reverse coded items).
+
+Let's see what happens if we do that ...
+
+### Coefficient alpha
+
+```{r}
+psych::alpha((df %>% select(e01:e05,e08)), check.keys = TRUE)
+```
+
+### Correlations and mediation
+
+```{r}
+df %>%
+  gather(food, value, starts_with("ffq_veg"), starts_with("ffq_fruit")) %>%
+  mutate(category = ifelse(grepl("veg", food), "vegetable", "fruit")) %>%
+  group_by(workerId, fruitsperday, vegsperday, category) %>%
+  summarize(ffq_avg = sum(value) / 30) %>%
+  spread(category, ffq_avg) %>%
+  left_join(
+    (
+      df %>%
+        gather(item, response, e01:e05, e08, m01:m07r) %>% # exclude b08
+        mutate(
+          scale = case_when(
+            grepl("m", item) ~ "motivation",
+            grepl("e", item) ~ "efficacy",
+          )
+        ) %>%
+        group_by(workerId, scale) %>%
+        summarize(mean_response = mean(response)) %>%
+        spread(scale, mean_response)
+    ),
+    by = "workerId"
+  ) %>%
+  mutate(total_si = fruitsperday + vegsperday, total_ffq = fruit + vegetable) %>%
+  ungroup() -> df_basic2
+
+rcor(
+  df_basic2 %>% 
+    select(motivation, efficacy, total_si, total_ffq)
+  )
+
+df_basic_scaled2 <-  df_basic2 %>%
+  select(-workerId) %>%
+  mutate_all(scale)
+
+lm(total_si ~ efficacy, data=df_basic_scaled2) %>% summary()
+lm(total_si ~ efficacy + motivation, data=df_basic_scaled2) %>% summary()
+```
+
+All correlations and the mediation relationships look essentially the same with the new scale.

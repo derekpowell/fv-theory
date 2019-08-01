@@ -1,0 +1,448 @@
+---
+title: "Nutrition methods draft"
+author: "Derek Powell"
+date: "7/25/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(tidyverse)
+library(brms)
+library(broom)
+library(patchwork)
+source("load-data.R")
+source("../code/plotting-functions.R")
+```
+
+## Study 1
+
+In Study 1, we examined the reliability and validity of the effectiveness and motivation scales. These two scales were composed of several brief statements with which participants rated their agreement using a Likert agreement rating scale ranging from "strongly disagree" to "strongly agree." After early piloting, we initially created eight items for the effectiveness scale and seven items for the motivation scale. Here we sought to empirically validate the reliability of these scales, making any adjustments as necessary. This study was preregistered, with details available at OSF_link. 
+
+### Participants
+
+In order to achieve reasonably accurate estimates of correlations among variables (Schönbrodt & Perugini, 2013), we targetted a sample size of 250 participants. Anticipating some attrition, we recruited `r nrow(df1_raw)` participants from Amazon's Mechanical Turk (mTurk) work distribution website. Of these participants, `r round(nrow(df1)/nrow(df1_raw)*100,1)`% completed the study and passed attention checks (described below), leaving `r nrow(df1)` participants in all further analyses. Participants were `r make_percent(count(df1, sex)[2,"n"][[1]]/(count(df1, sex)[3,"n"][[1]] + count(df1, sex)[2,"n"][[1]]))`% female (`r count(df1, sex)[2,"n"][[1]]` female, `r count(df1, sex)[3,"n"][[1]]` male), with a median age of `r median(df1$age)` years. Participants were largely educated (`r make_percent(nrow(filter(df1, educ >= 4))/nrow(df1))`% hold a bachelor's degree or higher) and relatively high-income (median income between \$50,001 and \$70,000).
+
+### Method
+
+To assess the validity of these scales, we sought to examine their relationship with participants fruit and vegetable consumption. We measured fruit and vegetable consumption using a modified version of the fruit and vegetable section of the Harvard Food Frequency Questionnaire (FFQ; citation). This quesionnaire asked participants to report how frequently they eat 12 different fruits and 18 different vegetables, with five response options ranging from "1 or fewer per month" to "1 or more per day". Typical serving sizes for each food were listed alongside their labels. In addition, participants also responded to two questions asking asked how many servings of fruits and vegetables they ate on an average day, with 10 response options ranging from "less than 1/2 serving" to "6 or more servings".
+
+```{r, echo=FALSE}
+effect_alpha <- psych::alpha((df1 %>% select(e01:e08)), check.keys = TRUE)
+motive_alpha <- psych::alpha((df1 %>% select(m01:m07r)), check.keys = TRUE)
+
+effect_alpha2 <- psych::alpha((df1 %>% select(e01:e05,e08)), check.keys = TRUE)
+
+df1 %>%
+  gather(food, value, starts_with("ffq_veg"), starts_with("ffq_fruit")) %>%
+  mutate(category = ifelse(grepl("veg", food), "vegetable", "fruit")) %>%
+  group_by(workerId, fruitsperday, vegsperday, category) %>%
+  summarize(ffq_avg = sum(value) / 30) %>%
+  spread(category, ffq_avg) %>%
+  left_join(
+    (
+      df1 %>%
+        gather(item, response, e01:e05, e08, m01:m07r) %>% # exclude b08
+        mutate(
+          scale = case_when(
+            grepl("m", item) ~ "motivation",
+            grepl("e", item) ~ "efficacy",
+          )
+        ) %>%
+        group_by(workerId, scale) %>%
+        summarize(mean_response = mean(response)) %>%
+        spread(scale, mean_response)
+    ),
+    by = "workerId"
+  ) %>%
+  mutate(total_si = fruitsperday + vegsperday, total_ffq = fruit + vegetable) %>%
+  ungroup() -> df1_avg
+```
+
+### Results
+
+Computing Chronbach's $\alpha$ for the efficacy and motivation scales revealed satisfactory reliability coefficients for both scales($\alpha$ = `r round(effect_alpha$total$raw_alpha,2)` for efficacy and $\alpha$ = `r round(motive_alpha$total$raw_alpha, 2)` for motivation). However, visual diagnosis of the scales (see Figure 1) revealed a lack of unidimensionality for the efficacy scale, with the two reverse-coded items appearing to cluster more strongly with one another than with the rest of the scale. Removing these items improved the reliability coefficient for efficacy to $\alpha$ = `r round(effect_alpha2$total$raw_alpha, 2)`. Figure 2 shows the distribution of each scale. Both scales appear well-calibrated: they are both only modestly skewed and are affected by neither ceiling nor floor effects.
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, fig.cap="Top: Correlation plots for efficacy and motivation scale items, arranged by hierarchical clusterig algorithm. Bottom: Histograms showing distributions of final efficacy and motivation scale scores."}
+# probably redo this so things line up better
+
+df1 %>%
+  select(e01:e08) %>%
+  cor() %>%
+  reorder_cormat() %>%
+  reshape2::melt(na.rm=TRUE) %>%
+  mutate(Scale = "Efficacy") %>%
+  bind_rows(
+    df1 %>%
+    select(m01:m07r) %>%
+    cor() %>%
+    reorder_cormat() %>%
+    reshape2::melt(na.rm=TRUE) %>%
+    mutate(Scale = "Motivation")
+  ) %>%
+  ggplot(aes(x=Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white") +
+  geom_tile() +
+  geom_text(aes(label=round(value,2)), size=6*.35) +
+  scale_fill_distiller(type="div", palette = "RdYlBu", limit=c(-1,1)) +
+  # scale_fill_viridis_c(limit = c(-1,1)) +
+  theme_minimal() +
+  facet_wrap(~Scale, scales="free" ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=.85)) +
+  theme(aspect.ratio = 1) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    axis.ticks = element_blank()
+  ) +
+  labs(fill="Correlation") +
+  df1_avg %>%
+  rename(Efficacy = efficacy, Motivation=motivation) %>%
+  gather(Scale, resp, Efficacy, Motivation) %>%
+  ggplot(aes(x=resp)) +
+  geom_histogram(bins=10) +
+  facet_wrap(~Scale) +
+  theme_bw() +
+  labs(x="Response", y="Frequency") +
+  plot_layout(ncol = 1, heights = c(3,1))
+```
+
+Table X shows the relationship between efficacy and motivation ratings and participants' fruit and vegetable consumption. We estimated the average servings of fruits and vegetables consumed by each participant in two ways: 1) based on the reported frequency of consumption in the 30-item FFQ; and 2) by summing together their responses to two questions asking about average daily fruit and vegetable consumption. Table 1 shows the correlations between the efficacy and motivation scales and consumption estimates from the 30-item FFQ and average consumption questions. Both scales significantly predict both measures of participants' fruit and vegetable consumption, validating these attitude scales as meaningfully related to dietary behaviors. Predictions were strongest for the motivation scale on the single item, and weakest for the efficacy scale predicting the 30-item intake. It is unclear which of the consumption estimates is more accurate; the estimate from the FFQ could be more reliable as it is based on multiple responses, yet participants might have more trouble recalling or assessing their specific consumption accurately as compared to their general fruit and vegetable consumption. 
+
+```{r,  results="asis", echo=FALSE, warning=FALSE}
+# code for table goes here, maybe use kable instead?
+#   caption = "Correlations among efficacy and motivation scales and measures of fruit and vegetable consumpion. All correlations are significant at the _P_ < .01 level."
+
+xtable::xtable(rcor(
+  df1_avg %>% 
+    select(motivation, efficacy, total_si, total_ffq)
+  ))
+```
+
+## Study 2
+
+Having developed reliable and validated scales measuring participants' beliefs in the efficacy of fruits and vegetables for improving health and their motivation to consume fruits and vegetables, we next examined how a theory-based educational intervention might change these attitudes. The study consisted of pretest; intervention and posttest; and delayed posttest sessions conducted over three different days. The intervention and posttest session was conducted one day after the pretest session, and the delayed posttest was conducted four days after participants saw the intervention.
+
+### Participants
+
+We preregistered a target sample size of 500 participants for our intervention and immediate posttest session. Anticipating signifcant attrition across sessions, we recruited 900 participants from Amazon's Mechanical Turk (mTurk) work distribution website to the initial pretest session. Of these participants, `r round(nrow(pre_df2)/nrow(pre_raw2)*100,1)`% completed the study and passed attention checks. These `r nrow(pre_df2)` participants were re-recruited via email X days later to participate in part 2 of the study, with `r nrow(post_raw2)` returning and `r round(nrow(post_df2)/nrow(post_raw2)*100,1)`% completing part 2 and passing attention checks. We then successfully re-recruited  `r nrow(post_delay_raw2)` of these participants for the delayed posttest session. Our final sample consisted of the `r nrow(df2)` participants with complete data for the first two sessions, of whom `r nrow(drop_na(df2))` had complete data for all sessions. Participants in the final sample were `r make_percent(count(df2, sex)[2,"n"][[1]]/(count(df2, sex)[3,"n"][[1]] + count(df2, sex)[2,"n"][[1]]))`% female (`r count(df2, sex)[2,"n"][[1]]` female, `r count(df2, sex)[3,"n"][[1]]` male), with a median age of `r median(df2$age)` years. Participants were largely educated (`r make_percent(nrow(filter(df2, educ >= 4))/nrow(df2))`% hold a bachelor's degree or higher) and relatively high-income (median income between \$50,001 and \$70,000).
+
+### Method
+
+At pretest, participants were recruited to a Qualtrics survey software webpage where they made all of their responses. Participants were presented with the efficacy and motivation scales on separate pages, presented in a random order and with the order of all items randomized. Following the attitude scales, participants were asked to provide some basic demographic data and to describe the eating habits in their household, including household size, number of children, how frequently their household eats out or orders food delivered, and how much participants enjoy cooking. The next day, participants were re-recruited via email (sent through mTurk contact system) to participate in part two of the study. 
+
+In part two, participants were randomly assigned to either a minimal intervention control condition or to the theory-based intervention condition. Participants in the minimal-intervention control condition were presented with a brief statement emphasizing the importance of fruit and vegetable consumption for a healthy diet. This control vignette was meant to equate for any demand characteristics or desirable responding patterns between conditions. In the theory-based intervention condition, participants read our theory-based intervention and were required to spend at least 2.5 minutes reading the essay before advancing. Once participants had completed reading the essays, they were asked to respond to four short answer questions. The questions were designed to test participants' understsanding of the novel intuitive theory, by asking questions like "why might leafy green vegetables contain different nutritious substances than carrots?" Participants were given a box to enter a free text response. After completing the short answer questions, participants made responses to the efficacy and motivation scales at posttest.
+
+Finally, all participants who completed the intervention and posttest session were invited again to participate in a delayed posttest session four days later. Those who returned were asked to respond to the efficacy and motivation scales once again in a randomized order.
+
+### Results
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# do modeling
+df2_long <- df2 %>%
+  gather(item, response, contains("0")) %>%
+  mutate(
+    response = as.numeric(response),
+    phase = factor(case_when(
+      grepl("pre_", item) ~ "pretest",
+      grepl("post_", item) ~ "posttest",
+      grepl("post2_", item) ~ "posttest2"
+      ), levels=c("pretest","posttest","posttest2"))
+    ) %>%
+  mutate(item = sub("pre_","", item), item = sub("post_","", item), item = sub("post2_","", item)) %>%
+  mutate(Scale = if_else(grepl("m",item), "motivation", "efficacy"))
+
+fit_eff <- cbrm(
+  response ~ 1 + phase*condition + (1|workerId) + (1|item),
+  data = df2_long %>% filter(Scale=="efficacy"),
+  family = cumulative(threshold="flexible"),
+  prior = c(
+    cumulative_intercept_prior(7, sd = 2, shape="flat"),
+    prior(normal(0, .5), class="b")
+    ),
+  sample_prior = "yes",
+  chains = 2,
+  cores = 2,
+  iter = 2000,
+  control = list(adapt_delta=.95),
+  file = "../local/paper_fit_eff.Rds"
+)
+
+fit_eff_coefs <- tidy(fit_eff, par_type="non-varying", intervals=TRUE, prob=.95)
+
+# summary(fit_eff)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# do modeling
+
+fit_motive <- cbrm(
+  response ~ 1 + phase*condition + (1|workerId) + (1|item),
+  data = df2_long %>% filter(Scale=="motivation"),
+  family = cumulative(threshold="flexible"),
+  prior = c(
+    cumulative_intercept_prior(7, sd = 2, shape="flat"),
+    prior(normal(0, .5), class="b")
+    ),
+  sample_prior = "yes",
+  chains = 2,
+  cores = 2,
+  iter = 2000,
+  control = list(adapt_delta=.95),
+  file = "../local/paper_fit_motive.Rds"
+)
+
+fit_motive_coefs <- tidy(fit_motive, par_type="non-varying", intervals=TRUE, prob=.95)
+```
+
+Our primary research question concerns the effect of the theory-based intervention on participants efficacy beliefs and motivation to consume fruits and vegetables, both immediately and after a brief delay. Figure # (top) shows participants' average responses to the efficacy and motivation scales at pretest and posttest across both conditions. As shown in the figure, there appears to be a subtle increase in participants' efficacy and motivation ratings from pretest to posttest in both conditions, but this increase is greater in the intervention condition than in the control condition. This condition difference is more readily apparent in Figure # (bottom), which shows the average change score for each scale across conditions, as well as the average change score for each individual item. The intervention lead to larger increases in efficacy and motivation scale averages, as well as larger increases for every individual item across both scales.
+
+To analyze these apparent effects, we used a hierarchical Bayesian ordinal regression model, following a difference-in-difference design. Participants' efficacy and motivation beliefs were assessed with Likert-type agreement ratings for six and seven items respectively, making ordinal regression most appropriate. The use of a Bayesian framework allowed us to 1) incorporate weakly-informative priors--namely, a prior that changes in beliefs are likely to be rather modest; 2) to produce posterior interval estimates of the true effect values; and 3) to employ robust inference tools as implemented in the BRMS R package and Stan probabilistic programming language (citations).
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="distribution and change score plots"}
+
+df2_scored <- df2_long %>%
+  mutate(condition = factor(condition)) %>%
+  group_by(workerId, condition, Scale, phase) %>%
+  summarize(score = mean(response)) %>%
+  mutate(phase_code = if_else(phase=="pretest",0,1))
+
+plot_mean_scores(df2_scored, "efficacy") +
+  theme(legend.position = "none") +
+  labs(title = "Efficacy") +
+  plot_change_scores(df2_long, "efficacy") +
+  plot_mean_scores(df2_scored, "motivation") +
+  theme(legend.position = "none") +
+  labs(title = "Motivation") +
+  plot_change_scores(df2_long, "motivation") +
+  plot_layout(ncol = 2, widths = c(1, 2))
+
+```
+
+We created two separate models to examine the effects of the intervention on efficacy beliefs and motivation to eat fruits and vegetables. In each of our models, we predicted participants' agreement ratings for individual scale items (response) from predictors for phase (pretest, posttest, or delayed posttest), condition (control vs intervention), and their interaction terms. These interaction terms reveal the degree to which the intervention changed participants' beliefs across the phases, allowing us to test the causal hypothesis and assess the intervention's effectiveness. We dummy-coded phase predictor variables so that pretest was the reference category against which posttest and delayed posttest phases were compared. This modeling approach allows us to examine the causal effect of our intervention compared to control at both immediate and delayed posttests, as well as pretest differences and changes from pretest to posttest sessions in the control condition, all within a single model.
+
+Table X shows the priors and posterior coefficients estimated from models assessing the effects of the intervention (posttest) and after a four day delay (delayed posttest). Most importantly, at immediate posttest, the theory-based intervention lead to greater increases in participants efficacy ($\beta$ = `r get_term(fit_eff_coefs, "phaseposttest:conditionintervention", "estimate")`, $CI_{95}$ = `r get_CI(fit_eff_coefs,"phaseposttest:conditionintervention")`) and motivation scale responses ($\beta$ = `r get_term(fit_motive_coefs, "phaseposttest:conditionintervention", "estimate")`, $CI_{95}$ = `r get_CI(fit_motive_coefs,"phaseposttest:conditionintervention")`) than did the control condition. In addition, participants efficacy beliefs remained higher for participants in the intervention condition than those in the control condition at delayed posttest (efficacy: $\beta$ = `r get_term(fit_eff_coefs, "phaseposttest:conditionintervention", "estimate")`, $CI_{95}$ = `r get_CI(fit_eff_coefs,"phaseposttest:conditionintervention")`). Participants' motivation scores were also higher in the intervention condition than control condition at delayed posttest, but a 95% credible interval includes zero ($\beta$ = `r get_term(fit_motive_coefs, "phaseposttest2:conditionintervention", "estimate")`, $CI_{95}$ = `r get_CI(fit_motive_coefs,"phaseposttest2:conditionintervention")`). There were no pretest differences for either the efficacy ($\beta$ = `r get_term(fit_eff_coefs, "conditionintervention", "estimate")`, $CI_{95}$ = `r get_CI(fit_eff_coefs,"conditionintervention")`) nor motivation ($\beta$ = `r get_term(fit_motive_coefs, "conditionintervention", "estimate")`, $CI_{95}$ = `r get_CI(fit_motive_coefs,"conditionintervention")`) items. As suggested by the changes in figure #, participants' efficacy and motivation scores in the control condition were elevated both at posttest (efficacy: $\beta$ = `r get_term(fit_eff_coefs, "phaseposttest", "estimate")`, $CI_{95}$ = `r get_CI(fit_eff_coefs,"phaseposttest")`; motivation stats) and delayed posttest (efficacy: $\beta$ = `r get_term(fit_eff_coefs, "phaseposttest2", "estimate")`, $CI_{95}$ = `r get_CI(fit_eff_coefs,"phaseposttest2")`; motivation: $\beta$ = `r get_term(fit_motive_coefs, "phaseposttest2", "estimate")`, $CI_{95}$ = `r get_CI(fit_motive_coefs,"phaseposttest2")`) relative to pretest. We speculate these changes may have been induced by responding to the short answer questionnaire, which may have prompted participants to think more seriously about the effects of fruit and vegetables on health. They may also simply be a result of familiarity with the scales.
+
+```{r, echo=FALSE}
+df2_change <- df2_scored %>%
+  select(-phase_code) %>%
+    spread(phase, score) %>%
+    mutate(
+      immediate = posttest-pretest,
+      delay = posttest2-pretest
+    )
+
+d_eff_immediate <- cohens_D(df2_change %>% filter(Scale=="efficacy") %>% .$immediate, group=df2_change %>% filter(Scale=="efficacy") %>% .$condition)
+d_eff_delay <- cohens_D(df2_change %>% filter(Scale=="efficacy") %>% .$delay, group=df2_change %>% filter(Scale=="efficacy") %>% .$condition)
+
+d_motive_immediate <- cohens_D(df2_change %>% filter(Scale=="motivation") %>% .$immediate, group=df2_change %>% filter(Scale=="motivation") %>% .$condition)
+d_motive_delay <- cohens_D(df2_change %>% filter(Scale=="motivation") %>% .$delay, group=df2_change %>% filter(Scale=="motivation") %>% .$condition)
+```
+
+Finally, to situate the magnitude of these effects within a more familiar framework, we also examined these data using change scores computed from the average pretest and posttest (or delayed posttest) scores for each participant. Comparing change scores across conditions reveals the effect of the intervention on efficacy beliefs to be _D_ = `r signif(d_eff_immediate,3)` at immediate posttest and _D_ = `r signif(d_eff_delay,3)` at delayed posttest. For motivation scores, the effect of the intervention was _D_ = `r signif(d_motive_immediate,3)` immediately following the intervention, and _D_ = `r signif(d_motive_delay, 3)` after delay. In sum, these findings indicate that the theory-based intervention successfully increased participants' beliefs that fruits and vegetables effectively promote health and their motivation to consume fruits and vegetables.
+
+```{r, echo=FALSE, results="asis"}
+# also need to rename variables etc
+
+fit_eff_coefs %>%
+  mutate(
+    term = recode(term,
+      phaseposttest = "phase[posttest]",
+      phaseposttest2 = "phase[delayed posttest]",
+      conditionintervention = "condition[intervention]",
+      `phaseposttest:conditionintervention` = "interaction[intervention:posttest]",
+      `phaseposttest2:conditionintervention` = "interaction[intervention:delayed posttest]"
+    )
+  ) %>%
+  rename(
+    `$\\sigma$` = std.error,
+    `$\\beta$` = estimate,
+    Term = term,
+    Upper = upper,
+    Lower = lower
+  ) %>%
+  mutate_if(is.numeric, signif, 3) %>%
+  xtable::xtable() %>%
+  print(sanitize.colnames.function = identity)
+
+fit_motive_coefs %>%
+  mutate(
+    term = recode(term,
+      phaseposttest = "phase[posttest]",
+      phaseposttest2 = "phase[delayed posttest]",
+      conditionintervention = "condition[intervention]",
+      `phaseposttest:conditionintervention` = "interaction[intervention:posttest]",
+      `phaseposttest2:conditionintervention` = "interaction[intervention:delayed posttest]"
+    )
+  ) %>%
+  rename(
+    `$\\sigma$` = std.error,
+    `$\\beta$` = estimate,
+    Term = term,
+    Upper = upper,
+    Lower = lower
+  ) %>%
+  mutate_if(is.numeric, signif, 3) %>%
+  xtable::xtable() %>%
+  print(sanitize.colnames.function = identity)
+
+```
+
+A secondary analysis seeks to probe the potential mediating effect of understanding the novel intuitive theory on participants efficacy and motivation scale responses. We used participants' responses to the short-answer questions as a measure for their understanding of the intuitive theory by having independent raters score participant's written answers. Details of the coding procedure are presented as supplementary materials. 
+
+Finally, one limitation of these findings concerns differential attrition rates among conditions. Significantly more participants failed to finish the intervention and posttest session after being assigned to the (longer) theory-based intervention (X of X) as compared to the minimal-intervention control condition (X of X; Chi-square = blah). It seems unlikely that this would have materially affected our results, but we nevertheless made revisions to our design in Study 3 to amelioriate this concern.
+
+## Study 3
+
+Study 3 had two goals: first, to replicate the finding that the theory-based intervention improved efficacy and motivation, and second, to compare this novel theory-based intervention against existing state-of-the-art educational messages from the United States Department of Agriculture's "MyPlate" nutritional guide. 
+
+[describe myplate]
+
+In addition, we also modified the control condition to match the lengths of the three interventions. We compiled an irrelevant essay describing the benefits and pitfalls of efforts to eat locally-grown foods, based on an existing popular-press article (citation). This essay was related to dietary choices without saying anything about nutrition or fruits and vegetables. All three intervention essays were roughly equated for length (theory-based intervention essay: XXX words; MyPlate essay: XXX words; Control essay: XXX words).
+
+As with Study 2, this study consisted of pretest; intervention and posttest; and delayed posttest sessions conducted over three different days. We preregistered plans to conduct the delayed posttest four days after the intervention session, but unfortunately due to an error the session was not conducted as scheduled. Instead, the delayed posttest was conducted one and a half weeks after the intervention session. Though we regret the missed opportunity to replicate our delayed posttest findings, this does afford the opportunity to examine effects at a longer delay.
+
+### Participants
+
+Anticipating smaller effects in comparing the MyPlate intervention with our theory-based intervention, we preregistered a target sample size of 400 participants percondition for our intervention and immediate posttest session (N = 1200 total). Anticipating signifcant attrition across sessions, we recruited 1750 participants from Amazon's Mechanical Turk (mTurk) work distribution website to the initial pretest session. Of these participants, `r round(nrow(pre_df3)/nrow(pre_raw3)*100,1)`% completed the study and passed attention checks. These `r nrow(pre_df3)` participants were re-recruited via email one day later to participate in part 2 of the study, with `r nrow(post_raw3)` returning and `r round(nrow(post_df3)/nrow(post_raw3)*100,1)`% completing part 2 and passing attention checks. We then successfully re-recruited  `r nrow(post_delay_raw3)` of these participants for the delayed posttest session. Our final sample consisted of the `r nrow(df3)` participants with complete data for the first two sessions, of whom `r nrow(drop_na(df3))` had complete data for all sessions. Participants in the final sample were `r make_percent(count(df3, sex)[3,"n"][[1]]/(count(df3, sex)[3,"n"][[1]] + count(df3, sex)[3,"n"][[1]]))`% female (`r count(df3, sex)[3,"n"][[1]]` female, `r count(df3, sex)[3,"n"][[1]]` male), with a median age of `r median(df3$age)` years. Participants were largely educated (`r make_percent(nrow(filter(df3, educ >= 4))/nrow(df3))`% hold a bachelor's degree or higher) and relatively high-income (median income between \$50,001 and \$70,000).
+
+### Method
+
+This study followed the same design and procedures as Study 2, with just a few important exceptions: In Study 3, participants were randomly assigned into one of three conditions: the theory-based intervention, the MyPlate intervention essay, or the locavore control essay. In addition, rather than being conducted four days after the intervention session, the delayed posttest session was conducted one and half weeks (11 days) after the intervention session.
+
+### Results
+
+```{r, echo=FALSE}
+# do dropout analysis
+```
+
+First, we confirmed that matching the lengths of interventions successfully resolved concerns about differential drop-out rates across conditions. Dropout rates for session two (participants beginning but not completing the intervention) were similar across all three intervention conditions (control: XX%, MyPlate: XX%, theory-based: XX%; Chi-Square stats). 
+
+```{r, echo=FALSE}
+df3_long <- df3 %>%
+  mutate(condition = factor(condition, levels = c("control","myplate", "theoryBased"), labels=c("Control","MyPlate","Theory-based"))) %>%
+  gather(item, response, contains("0")) %>%
+  mutate(
+    response = as.numeric(response),
+    phase = factor(case_when(
+      grepl("pre_", item) ~ "pretest",
+      grepl("post_", item) ~ "posttest",
+      grepl("post2_", item) ~ "posttest2"
+      ), levels=c("pretest","posttest","posttest2"))
+    ) %>%
+  mutate(item = sub("pre_","", item), item = sub("post_","", item), item = sub("post2_","", item)) %>%
+  mutate(Scale = if_else(grepl("m",item), "motivation", "efficacy"))
+
+## efficacy
+
+fit_eff3 <- cbrm(
+  response ~ 1 + phase*condition + (1|workerId) + (1|item),
+  data = df3_long %>% filter(Scale=="efficacy") %>% mutate(condition = relevel(condition, ref="Theory-based")),
+  family = cumulative(threshold="flexible"),
+  prior = c(
+    cumulative_intercept_prior(7, sd = 2, shape="flat"),
+    prior(normal(0, .5), class="b")
+    ),
+  sample_prior = "yes",
+  chains = 2,
+  cores = 2,
+  iter = 2000,
+  control = list(adapt_delta=.95),
+  file = "../local/paper_fit_eff.Rds"
+)
+
+fit_eff_coefs3 <- tidy(fit_eff3, par_type="non-varying", intervals=TRUE, prob=.95)
+
+
+## Motivation
+fit_motive3 <- cbrm(
+  response ~ 1 + phase*condition + (1|workerId) + (1|item),
+  data = df3_long %>% filter(Scale=="motivation") %>% mutate(condition = relevel(condition, ref="Theory-based")),
+  family = cumulative(threshold="flexible"),
+  prior = c(
+    cumulative_intercept_prior(7, sd = 2, shape="flat"),
+    prior(normal(0, .5), class="b")
+    ),
+  sample_prior = "yes",
+  chains = 2,
+  cores = 2,
+  iter = 2000,
+  control = list(adapt_delta=.95),
+  file = "../local/paper_fit_motive.Rds"
+)
+
+fit_motive_coefs3 <- tidy(fit_motive3, par_type="non-varying", intervals=TRUE, prob=.95)
+```
+
+
+As in Study 2, our primary research question concerns the effect of the theory-based intervention on participants efficacy beliefs and motivation to consume fruits and vegetables, here compared against both an irrelevant control intervention and against the USDA's current educational messaging in its MyPlate nutritional guide. Figure # (top) shows the distribution of participants' average responses to the efficacy and motivation scales at pretest and posttest across control, MyPlate, and  theory-based intervention conditions. As shown in the figure, there appears to be a subtle increase in participants' efficacy and motivation ratings from pretest to posttest in all conditions, but this increase is greater in the myPlate condition and greater-still in the theory-based intervention condition.
+
+```{r, echo=FALSE, fig.cap="Average scale scores and item-wise change scores for motivation and efficacy scales across conditions."}
+df3_scored <- df3_long %>%
+  group_by(workerId, condition, Scale, phase) %>%
+  summarize(score = mean(response)) %>%
+  mutate(phase_code = if_else(phase=="pretest",0,1))
+
+(plot_mean_scores(df3_scored, "efficacy") +
+  theme(legend.position = "none") +
+  labs(title = "Efficacy") +
+  plot_change_scores(df3_long, "efficacy") +
+  plot_mean_scores(df3_scored, "motivation") +
+  theme(legend.position = "none") +
+  labs(title = "Motivation") +
+  plot_change_scores(df3_long, "motivation")) *
+  scale_color_discrete() +
+  plot_layout(ncol = 2, widths = c(1, 2))
+```
+
+
+We again created two separate models to examine the effects of these interventions on efficacy beliefs and motivation to eat fruits and vegetables, both immediately and after a delay. In each of our models, we predicted participants' agreement ratings for individual scale items (response) from dummy-coded predictors for phase (pretest, posttest, or delayed posttest), condition (control vs intervention), and their interaction terms. As before, we dummy-coded phase predictor variables so that pretest was the reference category against which posttest and delayed posttest phases were compared. Here, we dummy-code condition predictor variables so that our theory-based intervention was the reference category against which control and MyPlate interventions were compared. 
+
+Table X shows the priors and posterior coefficients estimated from models assessing the effects of the intervention (posttest) and after an 11 day delay (delayed posttest). Most importantly, at immediate posttest, the theory-based intervention lead to greater increases in participants efficacy ($\beta$ = `r get_term(fit_eff_coefs, "phaseposttest:conditionintervention", "estimate")`, $CI_{95}$ = `r get_CI(fit_eff_coefs,"phaseposttest:conditionintervention")`) and motivation scale responses (stats) than did the control condition. In addition, participants efficacy and motivation beliefs remained higher for participants in the intervention condition than those in the control condition at delayed posttest (efficacy: $\beta$ = `r get_term(fit_eff_coefs, "phaseposttest2:conditionintervention", "estimate")`, $CI_{95}$ = `r get_CI(fit_eff_coefs,"phaseposttest2:conditionintervention")`; motivation stats). There were no pretest differences for either the efficacy ($\beta$ = `r get_term(fit_eff_coefs, "conditionintervention", "estimate")`, $CI_{95}$ = `r get_CI(fit_eff_coefs,"conditionintervention")`) nor motivation (stats) items. As suggested by the changes in figure #, participants' efficacy and motivation scores in the control condition were elevated both at posttest (efficacy: $\beta$ = `r get_term(fit_eff_coefs, "phaseposttest", "estimate")`, $CI_{95}$ = `r get_CI(fit_eff_coefs,"phaseposttest")`; motivation stats) and delayed posttest (efficacy: $\beta$ = `r get_term(fit_eff_coefs, "phaseposttest2", "estimate")`, $CI_{95}$ = `r get_CI(fit_eff_coefs,"phaseposttest2")`; motivation stats) relative to pretest. We speculate these changes may have been induced by the short answer questionnaire, which may have prompted participants to think more seriously about the effects of fruit and vegetables on health.
+
+```{r, echo=FALSE}
+df3_change <- df3_scored %>%
+  select(-phase_code) %>%
+    spread(phase, score) %>%
+    mutate(
+      immediate = posttest-pretest,
+      delay = posttest2-pretest
+    )
+
+# efficacy (this would all be better as a function ...)
+d_eff_immediate_c_v_tb <- cohens_D(
+  df3_change %>% filter(condition!="MyPlate", Scale=="efficacy") %>% .$immediate, 
+  group = df3_change %>% filter(condition!="MyPlate", Scale=="efficacy")  %>% .$condition)
+
+d_eff_delay_c_v_tb <- cohens_D(df3_change %>% filter(condition!="MyPlate", Scale=="efficacy") %>% .$delay, group=df3_change %>% filter(condition!="MyPlate", Scale=="efficacy") %>% .$condition)
+
+d_eff_immediate_mp_v_tb <- cohens_D(
+  df3_change %>% filter(condition!="Control", Scale=="efficacy") %>% .$immediate, 
+  group = df3_change %>% filter(condition!="Control", Scale=="efficacy")  %>% .$condition)
+
+d_eff_delay_mp_v_tb <- cohens_D(df3_change %>% filter(condition!="Control", Scale=="efficacy") %>% .$delay, group=df3_change %>% filter(condition!="Control", Scale=="efficacy") %>% .$condition)
+
+# motivation
+d_motive_immediate_c_v_tb <- cohens_D(
+  df3_change %>% filter(condition!="MyPlate", Scale=="motivation") %>% .$immediate, 
+  group = df3_change %>% filter(condition!="MyPlate", Scale=="motivation")  %>% .$condition)
+
+d_motive_delay_c_v_tb <- cohens_D(df3_change %>% filter(condition!="MyPlate", Scale=="motivation") %>% .$delay, group=df3_change %>% filter(condition!="MyPlate", Scale=="motivation") %>% .$condition)
+
+d_motive_immediate_mp_v_tb <- cohens_D(
+  df3_change %>% filter(condition!="Control", Scale=="motivation") %>% .$immediate, 
+  group = df3_change %>% filter(condition!="Control", Scale=="motivation")  %>% .$condition)
+
+d_motive_delay_mp_v_tb <- cohens_D(df3_change %>% filter(condition!="Control", Scale=="motivation") %>% .$delay, group=df3_change %>% filter(condition!="Control", Scale=="motivation") %>% .$condition)
+```
+
+We again assessed the magnitude of these effects by examining these data using change scores computed from the average pretest and posttest (or delayed posttest) scores for each participant. Comparing change scores across conditions reveals the effect of the theory-based intervention against control for efficacy ratings was _D_ = `r d_eff_immediate_c_v_tb` at immediate posttest and _D_ = `r d_eff_delay_c_v_tb` at delayed posttest. For motivation, the effect of the theory-based intervention against control was _D_ = `r d_motive_immediate_c_v_tb` at immediate posttest and _D_ = `r d_motive_delay_c_v_tb` after a delay. Compared with the MyPlate intervention, the effect of the theory-based intervention for efficacy ratings was _D_ = `r d_eff_immediate_mp_v_tb` at immediate posttest and _D_ = `r d_eff_delay_mp_v_tb` at delayed posttest. For motivation, the effect of the theory-based intervention against MyPlate was _D_ = `r d_motive_immediate_mp_v_tb` at immediate posttest and _D_ = `r d_motive_delay_mp_v_tb` after a delay. These findings replicated our previous findings in Study 2 and also demonstrate that the theory-based intervention was more effective than existing state-of-the-art educational materials.
+
+Finally, we also examined the potential mediating effect of participants' understanding of the novel intuitive theory, as measured by their responses to the short-answer questions, on their efficacy and motivation scale responses. [add this]

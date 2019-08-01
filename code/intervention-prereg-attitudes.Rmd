@@ -1,0 +1,591 @@
+---
+title: "R Notebook"
+output: 
+  html_notebook: 
+    code_folding: hide
+---
+
+analyzing the preregistered intervention study ahead of our meeting today, friday May 17, 2019.
+
+
+```{r}
+library(tidyverse)
+library(brms)
+
+devtools::source_gist(id = "f1994c0f8325abbc5d300600744af39d", filename="cbrm.R")
+
+theme_set(theme_bw() + theme(panel.grid = element_blank()))
+
+read_qualtrics_csv <- function(fname) {
+  headers <- as.matrix(read.csv(fname, skip = 0, header = F, nrows = 1, as.is = T))
+  df <- read_csv(fname, skip = 3, col_names = headers)
+  colnames(df) <- headers
+  df <- df[which(df[, "DistributionChannel", ] == "anonymous"), ] # remove survey previews
+  total_n <- nrow(df)
+  
+  remove_cols <- c(
+    "RecipientLastdata",
+    "RecipientFirstdata",
+    "RecipientEmail",
+    # "Finished",
+    "ResponseId",
+    "ExternalReference",
+    "DistributionChannel",
+    "UserLanguage",
+    "Status"
+  )
+
+  df <- df[, -which(colnames(df) %in% remove_cols)]
+
+  return(df)
+}
+
+pre <- read_qualtrics_csv("../data_private/nutrition+interv+may2019+pretest_May+16,+2019_09.33.csv")
+
+post <- read_qualtrics_csv("../data_private/nutrition+interv+may2019+posttest_May+17,+2019_12.08.csv")
+
+
+pre_df <- pre %>%
+  as_tibble() %>%
+  filter(Progress==100, check_2==2, check_7==7) %>%
+  select(-check_2, -check_7) %>%
+  select(
+    workerId, m01:e06, sex:enjoy_cook
+  ) %>%
+  # mutate_at(vars(contains("0")), as.numeric) %>%
+  rename_at(vars(contains("0")), function(x){paste0("pre_",x)})
+
+
+post_df <- post %>%
+  as_tibble() %>%
+  filter(Progress==100, check_2==2, check_7==7) %>%
+  select(-check_2, -check_7) %>%
+  select(
+    workerId, condition, m01:e06
+  ) %>%
+  # mutate_at(vars(contains("0")), as.numeric) %>%
+  rename_at(vars(contains("0")), function(x){paste0("post_",x)})
+
+
+df <- left_join( post_df, pre_df, by="workerId")
+
+fr_df <- post %>%
+  as_tibble() %>%
+  filter(Progress==100, check_2==2, check_7==7) %>%
+  select(workerId, condition, leafy_v_carrots, broccoli_cancer, phyto, free_radicals)
+
+write_csv(fr_df, "../data_private/interv-free-responses-may2019.csv")
+
+rm(fr_df)
+```
+
+
+We recruited `r nrow(pre)` participants, of whom `r nrow(pre_df)` passed attention checks in the pretest phase and were re-recruited. A total of `r nrow(post)` returned, and of those `r nrow(post_df)` passed attention checks at posttest.
+
+We randomly assigned half of participants to our intervention and half to a minimal-intervention control.
+
+```{r}
+df %>%
+  group_by(condition) %>%
+  count()
+```
+
+```{r}
+dfl <- df %>%
+  gather(item, resp, pre_m01:pre_e06, post_m01:post_e06) %>%
+  mutate(phase = factor(if_else(grepl("post_", item),"posttest","pretest"), levels=c("pretest","posttest"))) %>%
+  mutate(item = sub("pre_","", item), item = sub("post_","", item)) %>%
+  mutate(Scale = if_else(grepl("m",item), "motivation", "efficacy"))
+
+df_scored <- dfl %>%
+  mutate(condition = factor(condition)) %>%
+  group_by(workerId, condition, Scale, phase) %>%
+  summarize(score = mean(resp)) %>%
+  mutate(phase_code = if_else(phase=="pretest",0,1))
+```
+
+### Histograms
+
+```{r}
+df_scored %>%
+  mutate(phase = ordered(phase, levels=c("pretest","posttest"))) %>%
+  ggplot(aes(x=score, fill=phase)) +
+  geom_histogram(position="dodge", alpha=.7, bins=20) +
+  scale_fill_discrete() +
+  facet_grid(~Scale + condition)
+```
+
+
+### Comparing conditions
+
+```{r}
+df_scored %>%
+  # mutate(phase = ordered(phase, levels=c("pretest","posttest"))) %>%
+  ggplot(aes(x=condition, y = score, fill=phase)) +
+  scale_fill_discrete() +
+  geom_boxplot() +
+  facet_wrap(~Scale)
+```
+
+## Inferential statistics
+
+Since things actually look quite normally distributed, let's just do a basic regression.
+
+First, I'll look at change scores and posttest from pretest and condition.
+
+### Change scores
+
+```{r}
+df_change <- df_scored %>%
+  select(-phase_code) %>%
+  spread(phase, score) %>%
+  mutate(change = posttest - pretest)
+
+
+t.test(change ~ condition, data=df_change %>% filter(Scale=="efficacy"))
+t.test(change ~ condition, data=df_change %>% filter(Scale=="motivation"))
+
+summary(lm(posttest ~ pretest + condition, data=df_change %>% filter(Scale=="efficacy")))
+summary(lm(posttest ~ pretest + condition, data=df_change %>% filter(Scale=="motivation")))
+```
+
+#### Effect size
+
+Looking at the change scores things look very robust, though these aren't big effects. Manually calculating cohen's D for the change score t-tests, efficacy shows d = .36 (medium) and motivation is similar
+
+```{r}
+df_change %>%
+  group_by(Scale,condition) %>%
+  summarize(mean_change = mean(change), se_change = sd(change)/sqrt(n()))
+
+```
+
+Considering that the motivation effect is quite small, it's possible we're just some what underpowered to detect it reliably, and that it's therefore a bit sensitive to analytic choices. If we pretend that d=.22 is the TRUE effect size in the population, then we'd only have about 80% power to detect it with our current sample size.
+
+### posttest regression
+
+I'll also perform that `posttest ~ pretest + condition` regression using beta regression, to account for boundedness of the scale. Things look good here.
+
+```{r}
+library(betareg)
+
+rescale_beta <- function(x, lower, upper) {
+  # rescales onto the open interval (0,1)
+  # rescales over theoretical bounds of measurement, specified by "upper" and "lower"
+
+  N <- length(x)
+  res <- (x - lower) / (upper - lower)
+  res <- (res * (N - 1) + .5) / N
+
+  return(as.vector(res))
+}
+
+df_beta_change <- df_change %>%
+  ungroup() %>%
+  mutate(pretest = rescale_beta(pretest, 1,7), posttest = rescale_beta(posttest, 1,7))
+
+summary(betareg(posttest ~ pretest + condition, data=df_beta_change %>% filter(Scale=="efficacy")))
+summary(betareg(posttest ~ pretest + condition, data=df_beta_change %>% filter(Scale=="motivation")))
+
+```
+
+### response regression model
+
+Next, let's look at models using `score ~ phase * condition`.
+
+```{r}
+fit_eff <- lm(score ~ phase*condition, data=df_scored %>% filter(Scale=="efficacy"))
+summary(fit_eff)
+
+fit_motive <- lm(score ~ phase_code*condition, data=df_scored %>% filter(Scale=="motivation"))
+summary(fit_motive)
+```
+
+Things look good for both models
+
+Can also try it as a beta regression in case that better captures the distribution. Still looks good.
+
+```{r}
+
+summary(betareg(score ~ phase*condition, 
+                data= df_beta_change %>% 
+                  gather(phase, score, pretest, posttest) %>%
+                  filter(Scale=="motivation")
+        ))
+
+```
+
+### Item-level analysis
+
+Plotting
+
+```{r}
+dfl %>%
+  spread(phase, resp) %>%
+  mutate(change = posttest-pretest) %>%
+  group_by(condition, Scale, item) %>%
+  summarize(mean_change=mean(change), 
+            ul = mean(change) + sd(change)/sqrt(n()),
+            ll = mean(change) - sd(change)/sqrt(n())) %>%
+  ggplot(aes(x=item, y=mean_change, color=condition, ymin=ll, ymax=ul)) +
+  geom_pointrange() +
+  facet_wrap(~Scale, nrow = 1, scales="free_x")
+  
+```
+
+#### response regression (ordinal)
+
+```{r}
+cumulative_intercept_prior <- function(k,
+                                            sd = 2,
+                                            alpha = 1, beta = 1,
+                                            shape = c("flat", "middle", "rightskewed", "leftskewed")) {
+  ## create priors on intercepts for cumulative() family regression
+  ## assumes that probability of response options follow beta distribution 
+  ## specified by a and b or by "shape" argument
+  ## defaults to uniform distribution over response categories
+  ##
+  ## k = number of categories
+  ## sd = std dev of normal over intercept
+  ## a, b = alpha and beta specifying shape of distribution
+  ## shape = string specifying pre-defined distribution shape
+
+  shapes <- list("rightskewed" = c(2, 4), 
+                 "leftskewed" = c(4, 2), 
+                 "middle" = c(3, 3), 
+                 "flat" = c(1, 1))
+
+  if (length(shape) == 1) {
+    alpha <- shapes[[shape]][1]
+    beta <- shapes[[shape]][2]
+  }
+
+  intercepts <- seq(1, k - 1)
+  prior_list <- lapply(intercepts, function(x) {
+    center <- qlogis(pbeta(x / k, alpha, beta))
+    p <- paste0("normal(", center, ",", sd, ")")
+
+    return(set_prior(p, class = "Intercept", coef = as.character(x)))
+  })
+
+  return(Reduce(c,prior_list))
+}
+
+
+fit_item_eff <- cbrm(
+  resp ~ 1 + phase*condition + (1|workerId) + (1|item),
+  data = dfl %>% filter(Scale=="efficacy"),
+  family = cumulative(threshold="flexible"),
+  prior = c(
+    cumulative_intercept_prior(7, sd = 1.5, shape="leftskewed"),
+    prior(normal(0, 0.5), class="b")
+    ),
+  # sample_prior = "only", 
+  chains = 2,
+  cores = 2,
+  iter = 2000,
+  control = list(adapt_delta=.90),
+  file = "../local/fit_item_eff.Rds"
+)
+
+summary(fit_item_eff)
+```
+
+
+```{r}
+
+fit_item_motive <- cbrm(
+  resp ~ 1 + phase*condition + (1|workerId) + (1|item),
+  data = dfl %>% filter(Scale=="motivation"),
+  family = cumulative(threshold="flexible"),
+  prior = c(
+    # prior(normal(-1,2), class="Intercept"),
+    cumulative_intercept_prior(7, sd = 1.5, shape="leftskewed"),
+    prior(normal(0,1), class="b")
+    ),
+  # sample_prior = "only", 
+  chains = 2,
+  cores = 2,
+  iter = 2000,
+  control = list(adapt_delta=.90),
+  file = "../local/fit_item_motive.Rds"
+)
+
+summary(fit_item_motive)
+```
+
+# Delayed posttest
+
+We conducted a second posttest session the week following the original intervention. Participants were recruited on Monday, May 20, 2019, approximately four days following the original intervention. 
+
+
+```{r}
+post2 <- read_qualtrics_csv("../data_private/nutrition+interv+may2019+delay+posttest_May+23,+2019_10.08.csv")
+
+df_post2 <- post2 %>%
+  as_tibble() %>%
+  filter(Progress==100, check_2==2, check_7==7) %>%
+  select(-check_2, -check_7) %>%
+  select(
+    workerId, m01:e06
+  ) %>%
+  # mutate_at(vars(contains("0")), as.numeric) %>%
+  rename_at(vars(contains("0")), function(x){paste0("post2_",x)})
+
+df_delay <- left_join( df, df_post2, by="workerId")
+```
+
+```{r}
+dfl_delay <- df_delay %>%
+  gather(item, resp, pre_m01:pre_e06, post_m01:post_e06, post2_m01:post2_e06) %>%
+  mutate(
+    phase = factor(case_when(
+      grepl("pre_", item) ~ "pretest",
+      grepl("post_", item) ~ "posttest",
+      grepl("post2_", item) ~ "posttest2"
+      ), levels=c("pretest","posttest","posttest2"))
+    ) %>%
+  mutate(item = sub("pre_","", item), item = sub("post_","", item), item = sub("post2_","", item)) %>%
+  mutate(Scale = if_else(grepl("m",item), "motivation", "efficacy"))
+
+df_scored_delay <- dfl_delay %>%
+  mutate(condition = factor(condition)) %>%
+  group_by(workerId, condition, Scale, phase) %>%
+  summarize(score = mean(resp))
+
+df_scored_delay %>%
+  # mutate(phase = ordered(phase, levels=c("pretest","posttest"))) %>%
+  ggplot(aes(x=condition, y = score, fill=phase)) +
+  scale_fill_discrete() +
+  geom_boxplot() +
+  facet_wrap(~Scale)
+```
+
+From the plots these appear to be very small effects. Below, t-tests on the change scores and `posttest2 ~ pretest + condition` regression models reveal significant effects for efficacy but not for motivation.
+
+```{r}
+df_change_delay <- df_scored_delay %>%
+  spread(phase, score) %>%
+  mutate(change = posttest2 - pretest)
+
+
+t.test(change ~ condition, data=df_change_delay %>% filter(Scale=="efficacy"))
+t.test(change ~ condition, data=df_change_delay %>% filter(Scale=="motivation"))
+
+summary(lm(posttest2 ~ pretest + condition, data=df_change_delay %>% filter(Scale=="efficacy")))
+summary(lm(posttest2 ~ pretest + condition, data=df_change_delay %>% filter(Scale=="motivation")))
+```
+
+A beta regression (accounting for boundedness of scale) reveals similar results.
+
+```{r}
+df_beta_change_delay <- df_change_delay %>%
+  ungroup() %>%
+  mutate(pretest = rescale_beta(pretest, 1,7), posttest2 = rescale_beta(posttest2, 1,7))
+
+summary(betareg(posttest2 ~ pretest + condition, data=df_beta_change_delay %>% filter(Scale=="efficacy")))
+summary(betareg(posttest2 ~ pretest + condition, data=df_beta_change_delay %>% filter(Scale=="motivation")))
+```
+
+### Multilevel model
+
+Finally, here are `resp ~ phase*condition` multilevel analyses using ordinal regression for efficacy and motivations. These are the most appropriate models for testing the effects. 
+
+```{r}
+# library(lme4)
+# 
+# summary(lmer(resp ~ 1 + phase*condition + (1|workerId) + (1|item),
+#   data = dfl_delay %>% filter(Scale=="efficacy")))
+```
+
+
+```{r}
+
+fit_item_eff_delay <- cbrm(
+  resp ~ 1 + phase*condition + (1|workerId) + (1|item),
+  data = dfl_delay %>% filter(Scale=="efficacy"),
+  family = cumulative(threshold="flexible"),
+  prior = c(
+    cumulative_intercept_prior(7, sd = 2, shape="leftskewed"),
+    prior(normal(0, 0.5), class="b")
+    ),
+  # sample_prior = "yes",
+  chains = 2,
+  cores = 2,
+  iter = 2000,
+  control = list(adapt_delta=.90),
+  file = "../local/fit_item_eff_delay.Rds"
+)
+
+summary(fit_item_eff_delay)
+```
+
+
+```{r}
+
+fit_item_motive_delay <- cbrm(
+  resp ~ 1 + phase*condition + (1|workerId) + (1|item),
+  data = dfl_delay %>% filter(Scale=="motivation"),
+  family = cumulative(threshold="flexible"),
+  prior = c(
+    # prior(normal(-1,2), class="Intercept"),
+    cumulative_intercept_prior(7, sd = 2, shape="leftskewed"),
+    prior(normal(0, 0.5), class="b")
+    ),
+  # sample_prior = "yes",
+  chains = 2,
+  cores = 2,
+  iter = 2000,
+  control = list(adapt_delta=.90),
+  file = "../local/fit_item_motive_delay.Rds"
+)
+
+summary(fit_item_motive_delay)
+```
+
+If we would like a hypothesis test I can run this again and compare to a null model to get a bayes factor. It samples very slowly though.
+
+## Open-ended responses
+
+We start with Rithvik's coding of the "Broccoli" item.
+
+```{r}
+df_codes <- read_csv("../data_private/interv-free-responses-may2019 - codes.csv") %>%
+  # select(workerId, score, junk) %>%
+  # rename(fr_score = score) %>%
+  # mutate(junk = replace_na(0)) %>%
+  mutate_at(vars(contains("junk")), replace_na, replace=0) %>%
+  mutate(broccoli_cancer = if_else(broccoli_cancer==9,0,broccoli_cancer)) %>% # I think Rithvik made a typo
+  mutate(
+    broccoli_cancer = broccoli_cancer/3,
+    phyto = phyto/5,
+    free_radicals = free_radicals/3,
+    ) %>%
+  mutate(fr_score = (broccoli_cancer + phyto + free_radicals)/3) %>%
+  filter(junk_1==0, junk_2==0, junk_3==0, junk_4==0) %>%
+  select(workerId, fr_score)
+
+df_coded <- df %>%
+  left_join(df_codes, by="workerId")
+
+df_coded %>% head()
+```
+
+```{r}
+df_coded %>%
+  group_by(condition) %>%
+  summarize(mean_fr = mean(fr_score, na.rm=TRUE), se = sd(fr_score, na.rm=TRUE)/sqrt(n()), n = n()) %>%
+  mutate(ll = mean_fr - se, ul = mean_fr+se) %>%
+  ggplot(aes(x=condition, y=mean_fr, ymin= mean_fr-1.96*se, ymax=mean_fr+1.96*se)) +
+  geom_pointrange() +
+  ylim(0,.5)
+
+
+```
+
+Clearly there is a condition difference. Below are some regressions to probe possible mediation of the condition effect by the free response scores. To keep things relatively simple I will look at change scores.
+
+So we're looking for `condition --> fr_score`, and to compare `condition --> change` with `(condition, fr_score) --> change`.
+
+
+What we see is a small and non-significant effect for efficacy, and a small but significant effect for motivation
+
+### Efficacy
+
+```{r}
+df_change_coded <- df_change %>%
+  left_join(df_codes, by="workerId") %>%
+  filter(!is.na(fr_score)) %>%
+  filter( !((fr_score==3) & (condition=="control")) )
+
+
+summary(lm(fr_score ~ condition, data=df_change_coded %>% filter(Scale=="efficacy")))
+summary(lm(change ~ condition, data=df_change_coded %>% filter(Scale=="efficacy")))
+summary(lm(change ~ condition + fr_score, data=df_change_coded %>% filter(Scale=="efficacy")))
+```
+
+#### Motivation
+
+```{r}
+summary(lm(fr_score ~ condition, data=df_change_coded %>% filter(Scale=="motivation")))
+summary(lm(change ~ condition, data=df_change_coded %>% filter(Scale=="motivation")))
+summary(lm(change ~ condition + fr_score, data=df_change_coded %>% filter(Scale=="motivation")))
+```
+
+Now we can also ask if free response scores are predictive of pretest scores within the control condition -- this would generally lend support to the idea that a firmer understanding of how FVs are beneficial promotes belief in their efficacy and motivation to consume them. I'll use beta regression to deal with the skewed response variable.
+
+Looks like no, but the other effects are still promising. 
+
+```{r}
+df_betachange_coded <- df_beta_change %>%
+  left_join(df_codes, by="workerId")
+
+summary(betareg(pretest ~ fr_score, data=df_betachange_coded %>% filter(Scale=="efficacy", condition=="control")))
+
+summary(betareg(pretest ~ fr_score, data=df_betachange_coded %>% filter(Scale=="motivation", condition=="control")))
+```
+
+# Demographics
+
+Do any demographics or other attributes of participatns relate to their attitudes or the change in their attitudes?
+
+```{r}
+df_demo <- df %>%
+  select(workerId, sex, age, educ, income, household, children, eat_out, enjoy_cook) %>%
+  full_join(df_change, by="workerId") %>%
+  mutate(eat_out = 6-(eat_out-10), enjoy_cook = case_when(enjoy_cook==11 ~ 3, enjoy_cook==12 ~ 4, TRUE ~ enjoy_cook))
+
+df_demo %>%
+  filter(Scale=="efficacy") %>%
+  select(pretest, change, sex, age, educ, income, household, children, eat_out, enjoy_cook) %>%
+  cor()
+
+df_demo %>%
+  filter(Scale=="motivation") %>%
+  select(pretest, change, sex, age, educ, income, household, children, eat_out, enjoy_cook) %>%
+  cor()
+```
+
+Enjoying cooking (1-4 scale) is correlated with motivation at r = .40. It doesn't look like it correlates with the change in their attitudes though (maybe somewhat surprising since it's pushing them toward top of scale). Many of the motivation items have
+something to do with being willing to spend more time cooking or learning new cooking techniques, so this correlation isn't very surprising and may not be very deep. But it makes sense.
+
+```{r}
+df_demo %>%
+  filter(Scale=="motivation") %>%
+  select(pretest, change, sex, age, educ, income, household, children, eat_out, enjoy_cook) %>%
+  ggplot(aes(x=enjoy_cook, y=pretest)) +
+  geom_jitter(width=.33) +
+  geom_smooth(method="gam") +
+  theme_bw()
+```
+
+# Reliability coding
+
+```{r}
+library(rel)
+
+reliab <- read_csv("../data_private/interv-free-responses-may2019 - reliability.csv") %>%
+  filter(junk == 0)
+
+reliab %>%
+  select(-junk) %>%
+  gather(
+    item, code, -workerId
+  ) %>%
+  mutate(coder = if_else(grepl("_d", item),"Derek","Rithvik")) %>%
+  mutate(item = gsub("_d","",item)) %>%
+  spread(coder, code) %>%
+  mutate(match = ifelse(Derek==Rithvik,1,0)) %>%
+  group_by(item) %>%
+  summarize(agreement = mean(match, na.rm=TRUE))
+```
+
+```{r}
+kappa_weighting <- "quadratic"
+
+summary(ckap(select(reliab, leafy_v_carrots, leafy_v_carrots_d), weight = kappa_weighting))
+summary(ckap(select(reliab, broccoli_cancer, broccoli_cancer_d), weight = kappa_weighting))
+summary(ckap(select(reliab, phyto, phyto_d), weight = kappa_weighting))
+summary(ckap(select(reliab, free_radicals, free_radicals_d), weight = kappa_weighting))
+```
+

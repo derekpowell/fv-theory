@@ -1,0 +1,131 @@
+---
+title: "open-ended reliability coding 2"
+output: html_notebook
+---
+
+This is an analysis of reliability with two new coders, Aarthi and Kristine, and our modestly revised coding system as of July 11, 2019.
+
+
+
+```{r}
+library(tidyverse)
+library(rel)
+source("helpers.R")
+
+df_all <- read_qualtrics("../data_private/interv-free-responses-may2019 - reliability2.csv")
+df <- df_all[1:52,]
+```
+
+
+```{r}
+df <- df %>%
+  mutate(
+    junk_phyto_d = recode(junk_phyto_d, "?" = .5),
+    junk_phyto = recode(junk_phyto, "?" = .5),
+    junk_free_radicals_d = recode(junk_free_radicals_d, "?" = .5),
+    junk_free_radicals = recode(junk_free_radicals, "?" = .5)
+    ) %>%
+  mutate_at(vars(contains("junk_")), function(x){ifelse(is.na(x),0,x)}) %>%
+  mutate(junk = junk_phyto + junk_phyto_d + junk_free_radicals + junk_free_radicals_d)
+```
+
+
+### Percent Agreement
+
+```{r}
+df %>%
+  filter(junk==0) %>%
+  select(-contains("junk")) %>%
+  gather(
+    item, code, -workerId
+  ) %>%
+  mutate(coder = if_else(grepl("_d", item),"Derek","Interns")) %>%
+  mutate(item = gsub("_d","",item)) %>%
+  spread(coder, code) %>%
+  mutate(match = ifelse(Derek==Interns,1,0)) %>%
+  group_by(item) %>%
+  summarize(agreement = mean(match, na.rm=TRUE))
+```
+
+
+### Cohen's Kappa
+
+Let's compute a real reliability coefficient: the quadratic weighted kappa for each scale.
+
+Some sources on Kappa:
+
+* A [peer reviewed article](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3900052/) reviewing its use
+* The [Wikipedia page](https://en.wikipedia.org/wiki/Cohen%27s_kappa)
+* A nice [stackoverflow answer](https://stats.stackexchange.com/questions/82162/cohens-kappa-in-plain-english)
+
+```{r}
+kappa_weighting <- "quadratic"
+df_nojunk <- df %>%
+  filter(junk==0)
+summary(ckap(select(df_nojunk, phyto, phyto_d), weight = kappa_weighting))
+summary(ckap(select(df_nojunk, free_radicals, free_radicals_d), weight = kappa_weighting))
+```
+
+## recodes
+
+recoding with kristine after poor reliability on "phyto" question in first round.
+
+```{r}
+df2  <- df_all[52:nrow(df_all),]
+
+df2 <- df2 %>%
+  select(workerId, phyto, phyto_d, junk_phyto, junk_phyto_d) %>%
+    mutate(
+    junk_phyto_d = recode(junk_phyto_d, "?" = .5),
+    junk_phyto = recode(junk_phyto, "?" = .5),
+    # junk_free_radicals_d = recode(junk_free_radicals_d, "?" = .5),
+    # junk_free_radicals = recode(junk_free_radicals, "?" = .5)
+    ) %>%
+  mutate_at(vars(contains("junk_")), function(x){ifelse(is.na(x),0,x)}) %>%
+  mutate(junk = junk_phyto + junk_phyto_d)
+```
+
+### percent agreement
+
+
+```{r}
+df2 %>%
+  filter(junk==0) %>%
+  select(-contains("junk")) %>%
+  gather(
+    item, code, -workerId
+  ) %>%
+  mutate(coder = if_else(grepl("_d", item),"Derek","Interns")) %>%
+  mutate(item = gsub("_d","",item)) %>%
+  spread(coder, code) %>%
+  mutate(match = ifelse(Derek==Interns,1,0)) %>%
+  group_by(item) %>%
+  summarize(agreement = mean(match, na.rm=TRUE))
+```
+
+```{r}
+kappa_weighting <- "quadratic"
+df2_nojunk <- df2 %>%
+  filter(junk==0)
+summary(ckap(select(df2_nojunk, phyto, phyto_d), weight = kappa_weighting))
+```
+
+looks good now!
+
+# leafy v carrots
+
+codes from aarthi and kristine, checking reliability against one another. reliability is poor for codes as of 7/26/19, 5:23 PM
+
+```{r}
+# from google sheet: leafy_carrots_rel
+df3 <- read_tsv(clipboard())
+
+summary(ckap(df3), weight="quadratic")
+```
+
+```{r}
+df3 %>%
+  mutate(match = ifelse(aarthi==kristine,1,0)) %>%
+  summarize(agreement = mean(match, na.rm=TRUE))
+```
+

@@ -1,0 +1,134 @@
+---
+title: "open-ended response coding reliability"
+output: html_notebook
+---
+
+
+
+
+# Reliability coding
+
+
+## First pass
+
+I (along with Ellen) have coded at least 50 responses for each item, and Rithvik has coded 80 responses for each item. Here we'll analyze the agreement/reliability of our codes.
+
+Here, I'll focus on the first 50 codes for each.
+
+```{r}
+install.packages("rel")
+```
+
+
+```{r}
+library(rel)
+library(tidyverse)
+
+df <- read_csv("../data_private/nutrition interv exp pilot 2019 - codes.csv")
+
+# df_f50 <- df[51:100,]
+df_f50 <- df[1:50,]
+```
+
+### Percent Agreement
+
+```{r}
+df_f50 %>%
+  filter(junk==0) %>%
+  select(-junk, -junk_rithvik, -condition) %>%
+  gather(
+    item, code, -workerId
+  ) %>%
+  mutate(coder = if_else(grepl("_Rithvik", item),"Rithvik","Derek")) %>%
+  mutate(item = gsub("_Rithvik","",item)) %>%
+  spread(coder, code) %>%
+  mutate(match = ifelse(Derek==Rithvik,1,0)) %>%
+  group_by(item) %>%
+  summarize(agreement = mean(match, na.rm=TRUE))
+```
+
+This suggests that coding for freeRadicals has some issues, but others look pretty strong.
+
+### Cohen's Kappa
+
+Let's compute a real reliability coefficient: the quadratic weighted kappa for each scale.
+
+Some sources on Kappa:
+
+* A [peer reviewed article](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3900052/) reviewing its use
+* The [Wikipedia page](https://en.wikipedia.org/wiki/Cohen%27s_kappa)
+* A nice [stackoverflow answer](https://stats.stackexchange.com/questions/82162/cohens-kappa-in-plain-english)
+
+```{r}
+kappa_weighting <- "quadratic"
+
+summary(ckap(select(df_f50, leafy_v_carrots, leafy_v_carrots_Rithvik), weight = kappa_weighting))
+summary(ckap(select(df_f50, broccoli, broccoli_Rithvik), weight = kappa_weighting))
+summary(ckap(select(df_f50, phyto, phyto_Rithvik), weight = kappa_weighting))
+summary(ckap(select(df_f50, freeRadicals, freeRadicals_Rithvik), weight = kappa_weighting))
+summary(ckap(select(df_f50, mushrooms, mushrooms_Rithvik), weight = kappa_weighting))
+```
+
+This generally agrees with the percent agreement conclusions, but confirms that codes are strong for all but freeRadicals (and maybe a bit weak for mushrooms too).
+
+## Second pass
+
+There were issues with both "Free radicals" and "mushrooms" items. Rithvik and I discussed the first 50 free radicals items and the first 20 mushrooms items, then recoded or coded 50 more items of each to assess reliability. We got good reliability on "free radicals" on the first pass of this but still had trouble on mushrooms. We discussed the mushrooms items up to line 71 and then each coded another 50. Finally, that resolved our issues and we established reliability.
+
+```{r}
+df[51:101,] %>%
+  filter(junk ==0) %>%
+  select(-junk, -junk_rithvik, -condition) %>%
+  gather(
+    item, code, -workerId
+  ) %>%
+  mutate(coder = if_else(grepl("_Rithvik", item),"Rithvik","Derek")) %>%
+  mutate(item = gsub("_Rithvik","",item)) %>%
+  filter(item=="freeRadicals" | item=="mushrooms") %>%
+  spread(coder, code) %>%
+  mutate(match = ifelse(Derek==Rithvik,1,0)) %>%
+  group_by(item) %>%
+  summarize(agreement = mean(match, na.rm=TRUE))
+```
+
+```{r}
+summary(ckap(select(filter(df[51:101,], junk==0), freeRadicals, freeRadicals_Rithvik), weight = kappa_weighting))
+summary(ckap(select(filter(df[71:121,], junk==0), mushrooms, mushrooms_Rithvik), weight = kappa_weighting))
+```
+
+# Comparing conditions
+
+We'll use Rithvik's codes for this because they are complete. Here's a simple plot.
+
+```{r}
+r_codes <- df %>%
+  filter(junk==0, junk_rithvik==0) %>%
+  select(-junk, -junk_rithvik) %>%
+  gather(
+    item, code, -workerId, -condition
+  ) %>%
+  mutate(coder = if_else(grepl("_Rithvik", item),"Rithvik","Derek")) %>%
+  mutate(item = gsub("_Rithvik","",item)) %>%
+  spread(coder, code) %>%
+  select(-Derek) %>%
+  rename(code = Rithvik)
+
+
+r_codes %>%
+  group_by(condition, item) %>%
+  summarize(
+    mean_code = mean(code, na.rm=TRUE),
+    se_code = sd(code, na.rm=TRUE)/sqrt(n()),
+    ul = mean_code + se_code,
+    ll = mean_code - se_code
+    ) %>%
+  ggplot(aes(x=condition, y = mean_code, ymin=ll, ymax=ul)) +
+  # geom_boxplot() +
+    geom_pointrange() +
+  facet_wrap(~item) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+Looks like the original and condensed interventions are performing similarly, and both are leading to higher scores than the control. "Mushrooms" is probably the weakest item, with the smallest increase in performance.
