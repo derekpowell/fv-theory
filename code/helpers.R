@@ -107,8 +107,8 @@ get_term <- function(df, coefficient, statistic, round=TRUE){
 
 get_CI <- function(df, coefficient, round=TRUE){
   # get CI from broom::tidy df and format
-  upper <- get_term(fit_eff_coefs, coefficient, "upper", round)
-  lower <- get_term(fit_eff_coefs, coefficient, "lower", round)
+  upper <- get_term(df, coefficient, "upper", round)
+  lower <- get_term(df, coefficient, "lower", round)
   
   output <- paste0("[",lower,", ",upper,"]")
   return(output)
